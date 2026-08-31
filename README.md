@@ -98,6 +98,29 @@ chmod +x scripts/build-macos.sh
 
 当前自动构建的 macOS 包未签名。公开分发时应配置 Apple Developer ID，对 `.app` 签名并提交 Apple notarization。
 
+## 发布版本
+
+推送符合 `v*` 的 Git Tag 后，GitHub Actions 会自动：
+
+1. 在 Windows 和 Apple Silicon macOS 上运行测试并打包；
+2. 生成 `DDTool-Windows-x64.exe` 和 `DDTool-macOS-arm64.dmg`；
+3. 计算 SHA-256 校验文件；
+4. 创建 GitHub Release，并上传安装包和校验文件。
+
+推荐使用发布脚本，它会检查版本格式、工作区和当前分支：
+
+```powershell
+# Windows
+.\scripts\release.ps1 v1.0.0
+```
+
+```bash
+# macOS
+./scripts/release.sh v1.0.0
+```
+
+也可以手动执行 `git tag -a v1.0.0 -m "Release v1.0.0"`，再执行 `git push origin v1.0.0`。
+
 ## 测试
 
 ```bash

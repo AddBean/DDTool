@@ -102,6 +102,5 @@ if src.exists():
 for path in dist.glob('*.exe'):
     if path.name != dst.name:
         path.unlink()
-print(dst)
 "@
 }
