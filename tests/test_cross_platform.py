@@ -7,7 +7,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ddtool import autostart
-from ddtool.quick_actions import MACOS_QUICK_ACTIONS, SHELL_ZSH
+from ddtool.macos_ui import macos_palette
+from ddtool.quick_actions import (
+    MACOS_QUICK_ACTIONS,
+    SHELL_ZSH,
+    TERMINAL_AUTO,
+    TERMINAL_GHOSTTY,
+    QuickAction,
+    macos_terminal_launch_args,
+)
 from ddtool.tray_app import DDToolTrayApp
 
 
@@ -15,6 +23,32 @@ class CrossPlatformTests(unittest.TestCase):
     def test_macos_presets_use_zsh(self) -> None:
         self.assertTrue(MACOS_QUICK_ACTIONS)
         self.assertTrue(all(action.shell == SHELL_ZSH for action in MACOS_QUICK_ACTIONS))
+
+    def test_quick_action_defaults_to_automatic_terminal(self) -> None:
+        action = QuickAction.from_dict(
+            {"name": "检查", "command": "pwd", "shell": "zsh"}
+        )
+        self.assertIsNotNone(action)
+        self.assertEqual(action.terminal, TERMINAL_AUTO)
+
+    def test_ghostty_launch_arguments(self) -> None:
+        self.assertEqual(
+            macos_terminal_launch_args("/tmp/test.command", TERMINAL_GHOSTTY),
+            [
+                "open",
+                "-na",
+                "Ghostty.app",
+                "--args",
+                "-e",
+                "/bin/zsh",
+                "/tmp/test.command",
+            ],
+        )
+
+    def test_macos_palette_uses_system_colors(self) -> None:
+        palette = macos_palette()
+        self.assertEqual(palette.window, "systemWindowBackgroundColor")
+        self.assertEqual(palette.text, "systemLabelColor")
 
     def test_launch_agent_is_valid_plist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

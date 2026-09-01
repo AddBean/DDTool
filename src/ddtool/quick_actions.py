@@ -8,24 +8,12 @@ import tempfile
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from tkinter import (
-    BooleanVar,
-    Button,
-    Checkbutton,
-    Frame,
-    Label,
-    Radiobutton,
-    StringVar,
-    TclError,
-    Text,
-    Toplevel,
-    messagebox,
-    ttk,
-)
+from tkinter import BooleanVar, StringVar, TclError, Text, Toplevel, messagebox, ttk
 import tkinter as tk
 from typing import Any, Callable
 
 from ddtool.config import APP_TITLE, get_config_dir
+from ddtool.macos_ui import configure_command_text, configure_dialog
 from ddtool.platform import IS_MACOS
 
 _open_dialog: Toplevel | None = None
@@ -41,6 +29,16 @@ BUILTIN_COMMAND_POSTPONE_LOCK = "ddtool:postpone-lock"
 SHELL_CMD = "cmd"
 SHELL_POWERSHELL = "powershell"
 SHELL_ZSH = "zsh"
+TERMINAL_AUTO = "auto"
+TERMINAL_GHOSTTY = "ghostty"
+TERMINAL_APPLE = "terminal"
+TERMINAL_ITERM2 = "iterm2"
+TERMINAL_CHOICES = (
+    (TERMINAL_AUTO, "自动（优先 Ghostty）"),
+    (TERMINAL_GHOSTTY, "Ghostty"),
+    (TERMINAL_APPLE, "Terminal"),
+    (TERMINAL_ITERM2, "iTerm2"),
+)
 DEFAULT_SHELL = SHELL_ZSH if IS_MACOS else SHELL_CMD
 
 
@@ -52,6 +50,7 @@ class QuickAction:
     keep_terminal: bool = False
     menu_path: str = ""
     shell: str = DEFAULT_SHELL
+    terminal: str = TERMINAL_AUTO
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "QuickAction | None":
@@ -78,6 +77,7 @@ class QuickAction:
             keep_terminal=bool(data.get("keep_terminal", False)),
             menu_path=menu_path,
             shell=shell,
+            terminal=_normalize_terminal(data.get("terminal")),
         )
 
 
@@ -195,7 +195,7 @@ def _parse_actions(raw_items: Any) -> tuple[list[QuickAction], bool]:
     for item in raw_items:
         if not isinstance(item, dict):
             continue
-        if "shell" not in item:
+        if "shell" not in item or (IS_MACOS and "terminal" not in item):
             changed = True
         action = QuickAction.from_dict(item)
         if action:
@@ -291,6 +291,7 @@ def _relocate_presets(actions: list[QuickAction]) -> tuple[list[QuickAction], bo
                 keep_terminal=action.keep_terminal,
                 menu_path=preset.menu_path,
                 shell=action.shell,
+                terminal=action.terminal,
             )
             changed = True
         updated.append(action)
@@ -346,6 +347,7 @@ def add_quick_action(
     command: str,
     keep_terminal: bool,
     shell: str = DEFAULT_SHELL,
+    terminal: str = TERMINAL_AUTO,
 ) -> QuickAction:
     name, menu_path = split_location(location)
     action = QuickAction(
@@ -355,6 +357,7 @@ def add_quick_action(
         keep_terminal=keep_terminal,
         menu_path=menu_path,
         shell=_normalize_shell(shell),
+        terminal=_normalize_terminal(terminal),
     )
     actions = load_quick_actions()
     actions.insert(0, action)
@@ -368,6 +371,7 @@ def update_quick_action(
     command: str,
     keep_terminal: bool,
     shell: str = DEFAULT_SHELL,
+    terminal: str = TERMINAL_AUTO,
 ) -> QuickAction | None:
     name, menu_path = split_location(location)
     updated: QuickAction | None = None
@@ -383,6 +387,7 @@ def update_quick_action(
             keep_terminal=keep_terminal,
             menu_path=menu_path,
             shell=_normalize_shell(shell),
+            terminal=_normalize_terminal(terminal),
         )
         actions.append(updated)
     if updated is None:
@@ -422,6 +427,7 @@ def replace_custom_order(custom: list[QuickAction]) -> None:
                 keep_terminal=original.keep_terminal,
                 menu_path=action.menu_path,
                 shell=original.shell,
+                terminal=original.terminal,
             )
         ordered.append(original)
     for action in current:
@@ -449,6 +455,12 @@ def _normalize_shell(raw: Any) -> str:
     if value in {"powershell", "pwsh", "ps"}:
         return SHELL_POWERSHELL
     return SHELL_CMD
+
+
+def _normalize_terminal(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    supported = {key for key, _label in TERMINAL_CHOICES}
+    return value if value in supported else TERMINAL_AUTO
 
 
 def _infer_shell(command: str) -> str:
@@ -530,7 +542,7 @@ def run_quick_action(action: QuickAction) -> None:
     shell = _normalize_shell(action.shell)
     command = _normalize_command(action.command)
     if IS_MACOS:
-        _run_macos_quick_action(command, action.keep_terminal)
+        _run_macos_quick_action(command, action.keep_terminal, action.terminal)
         return
     use_script = "\n" in command or shell == SHELL_POWERSHELL
     if use_script:
@@ -572,12 +584,52 @@ def run_quick_action(action: QuickAction) -> None:
         messagebox.showerror(APP_TITLE, f"执行快捷操作失败：\n{exc}")
 
 
-def _run_macos_quick_action(command: str, keep_terminal: bool) -> None:
+def _macos_app_exists(app_name: str) -> bool:
+    candidates = (
+        Path("/Applications") / app_name,
+        Path.home() / "Applications" / app_name,
+    )
+    return any(candidate.exists() for candidate in candidates)
+
+
+def _resolve_macos_terminal(terminal: str) -> str:
+    terminal = _normalize_terminal(terminal)
+    if terminal != TERMINAL_AUTO:
+        return terminal
+    if _macos_app_exists("Ghostty.app"):
+        return TERMINAL_GHOSTTY
+    if _macos_app_exists("iTerm.app"):
+        return TERMINAL_ITERM2
+    return TERMINAL_APPLE
+
+
+def macos_terminal_launch_args(script: str, terminal: str) -> list[str]:
+    terminal = _resolve_macos_terminal(terminal)
+    if terminal == TERMINAL_GHOSTTY:
+        return [
+            "open",
+            "-na",
+            "Ghostty.app",
+            "--args",
+            "-e",
+            "/bin/zsh",
+            script,
+        ]
+    if terminal == TERMINAL_ITERM2:
+        return ["open", "-a", "iTerm", script]
+    return ["open", "-a", "Terminal", script]
+
+
+def _run_macos_quick_action(
+    command: str,
+    keep_terminal: bool,
+    terminal: str = TERMINAL_AUTO,
+) -> None:
     try:
         if keep_terminal:
             script = _write_command_script(command, SHELL_ZSH)
             subprocess.Popen(
-                ["open", "-a", "Terminal", script],
+                macos_terminal_launch_args(script, terminal),
                 cwd=str(Path.home()),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -634,31 +686,45 @@ def show_reorder_quick_actions_dialog(
     dialog.title("编辑快捷操作")
     dialog.minsize(420, 460)
     dialog.attributes("-topmost", True)
+    palette = configure_dialog(dialog)
 
-    Label(
+    ttk.Label(
         dialog,
         text="拖动排列：文件夹上半=前方，下半=放入组内；操作上半=前方，下半=后方；空白=顶层。右键删除自定义操作。",
-        fg="#666666",
         wraplength=380,
         justify="left",
+        style="DDTool.Secondary.TLabel" if IS_MACOS else "TLabel",
     ).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(16, 8))
 
-    tree_frame = Frame(dialog)
+    tree_frame = ttk.Frame(
+        dialog, style="DDTool.TFrame" if IS_MACOS else "TFrame"
+    )
     tree_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=16, pady=8)
     style = ttk.Style(dialog)
-    style.configure("Reorder.Treeview", rowheight=26)
-    tree = ttk.Treeview(tree_frame, show="tree", selectmode="browse", style="Reorder.Treeview")
+    tree_style = "DDTool.Treeview" if IS_MACOS else "Reorder.Treeview"
+    if not IS_MACOS:
+        style.configure(tree_style, rowheight=26)
+    tree = ttk.Treeview(tree_frame, show="tree", selectmode="browse", style=tree_style)
     scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scroll.set)
     tree.grid(row=0, column=0, sticky="nsew")
     scroll.grid(row=0, column=1, sticky="ns")
     tree_frame.columnconfigure(0, weight=1)
     tree_frame.rowconfigure(0, weight=1)
-    tree.tag_configure("folder", foreground="#1a365d")
-    tree.tag_configure("locked", foreground="#888888")
-    tree.tag_configure("action", foreground="#222222")
-    tree.tag_configure("preset", foreground="#666666")
-    tree.tag_configure("drop", background="#d0e7ff")
+    if palette is not None:
+        tree.tag_configure("folder", foreground=palette.text)
+        tree.tag_configure("locked", foreground=palette.secondary_text)
+        tree.tag_configure("action", foreground=palette.text)
+        tree.tag_configure("preset", foreground=palette.secondary_text)
+        tree.tag_configure(
+            "drop", background=palette.selected, foreground=palette.selected_text
+        )
+    else:
+        tree.tag_configure("folder", foreground="#1a365d")
+        tree.tag_configure("locked", foreground="#888888")
+        tree.tag_configure("action", foreground="#222222")
+        tree.tag_configure("preset", foreground="#666666")
+        tree.tag_configure("drop", background="#d0e7ff")
 
     def _ensure_folder(parts: tuple[str, ...]) -> str:
         parent = ""
@@ -924,7 +990,7 @@ def show_reorder_quick_actions_dialog(
     tree.bind("<MouseWheel>", _on_wheel)
     tree.bind("<ButtonPress-3>", _on_right_click)
 
-    Button(dialog, text="完成", width=8, command=_close).grid(
+    ttk.Button(dialog, text="完成", width=8, command=_close).grid(
         row=2, column=1, sticky="e", padx=16, pady=(8, 16)
     )
     dialog.columnconfigure(0, weight=1)
@@ -961,34 +1027,51 @@ def show_quick_action_dialog(
     dialog = Toplevel(parent)
     _open_dialog = dialog
     dialog.title("编辑快捷操作" if editing else "添加快捷操作")
-    dialog.minsize(520, 360)
+    dialog.minsize(600 if IS_MACOS else 520, 430 if IS_MACOS else 360)
     dialog.attributes("-topmost", True)
+    palette = configure_dialog(dialog)
 
     location_var = StringVar(value=action_full_path(action) if action else "")
     keep_var = BooleanVar(value=action.keep_terminal if action else False)
     shell_var = StringVar(value=_normalize_shell(action.shell if action else DEFAULT_SHELL))
+    terminal_labels = {key: label for key, label in TERMINAL_CHOICES}
+    terminal_keys = {label: key for key, label in TERMINAL_CHOICES}
+    terminal_var = StringVar(
+        value=terminal_labels[_normalize_terminal(action.terminal if action else None)]
+    )
 
-    Label(dialog, text="名称").grid(row=0, column=0, sticky="e", padx=(16, 8), pady=(16, 8))
+    label_style = "DDTool.TLabel" if IS_MACOS else "TLabel"
+    secondary_style = "DDTool.Secondary.TLabel" if IS_MACOS else "TLabel"
+    frame_style = "DDTool.TFrame" if IS_MACOS else "TFrame"
+    check_style = "DDTool.TCheckbutton" if IS_MACOS else "TCheckbutton"
+    radio_style = "DDTool.TRadiobutton" if IS_MACOS else "TRadiobutton"
+
+    ttk.Label(dialog, text="名称", style=label_style).grid(
+        row=0, column=0, sticky="e", padx=(20, 10), pady=(20, 8)
+    )
     location_entry = ttk.Combobox(
         dialog,
         textvariable=location_var,
         values=collect_menu_paths(load_quick_actions()),
         width=40,
     )
-    location_entry.grid(row=0, column=1, columnspan=2, sticky="we", padx=(0, 16), pady=(16, 8))
-    Label(
+    location_entry.grid(row=0, column=1, columnspan=2, sticky="we", padx=(0, 20), pady=(20, 8))
+    ttk.Label(
         dialog,
         text="可用 / 分层，最后一段是名称，如 快捷菜单/编译命令/编译项目",
-        fg="#666666",
-    ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(0, 16))
+        style=secondary_style,
+    ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(0, 20))
 
-    Label(dialog, text="指令").grid(row=2, column=0, sticky="ne", padx=(16, 8), pady=8)
-    command_frame = Frame(dialog)
-    command_frame.grid(row=2, column=1, columnspan=2, sticky="nsew", padx=(0, 16), pady=8)
+    ttk.Label(dialog, text="指令", style=label_style).grid(
+        row=2, column=0, sticky="ne", padx=(20, 10), pady=10
+    )
+    command_frame = ttk.Frame(dialog, style=frame_style)
+    command_frame.grid(row=2, column=1, columnspan=2, sticky="nsew", padx=(0, 20), pady=10)
     command_text = Text(command_frame, width=42, height=8, wrap="none", undo=True, font="TkFixedFont")
     command_scroll_y = ttk.Scrollbar(command_frame, orient="vertical", command=command_text.yview)
     command_scroll_x = ttk.Scrollbar(command_frame, orient="horizontal", command=command_text.xview)
     command_text.configure(yscrollcommand=command_scroll_y.set, xscrollcommand=command_scroll_x.set)
+    configure_command_text(command_text, palette)
     command_text.grid(row=0, column=0, sticky="nsew")
     command_scroll_y.grid(row=0, column=1, sticky="ns")
     command_scroll_x.grid(row=1, column=0, sticky="ew")
@@ -996,23 +1079,61 @@ def show_quick_action_dialog(
     command_frame.rowconfigure(0, weight=1)
     if action is not None:
         command_text.insert("1.0", action.command)
-    Label(
+    ttk.Label(
         dialog,
         text="支持多行；指令框内 Enter 换行，Ctrl+Enter 保存",
-        fg="#666666",
-    ).grid(row=3, column=1, columnspan=2, sticky="w", padx=(0, 16))
+        style=secondary_style,
+    ).grid(row=3, column=1, columnspan=2, sticky="w", padx=(0, 20))
 
-    Label(dialog, text="运行方式").grid(row=4, column=0, sticky="e", padx=(16, 8), pady=(8, 8))
-    options_row = Frame(dialog)
-    options_row.grid(row=4, column=1, columnspan=2, sticky="w", padx=(0, 16), pady=(8, 8))
+    ttk.Label(dialog, text="运行环境", style=label_style).grid(
+        row=4, column=0, sticky="e", padx=(20, 10), pady=(14, 8)
+    )
+    options_row = ttk.Frame(dialog, style=frame_style)
+    options_row.grid(row=4, column=1, columnspan=2, sticky="we", padx=(0, 20), pady=(14, 8))
     if IS_MACOS:
-        Radiobutton(options_row, text="zsh", variable=shell_var, value=SHELL_ZSH).pack(side="left")
+        ttk.Label(options_row, text="Shell", style=secondary_style).pack(side="left")
+        shell_picker = ttk.Combobox(
+            options_row,
+            textvariable=shell_var,
+            values=(SHELL_ZSH,),
+            state="readonly",
+            width=8,
+        )
+        shell_picker.pack(side="left", padx=(8, 20))
+        ttk.Label(options_row, text="终端", style=secondary_style).pack(side="left")
+        terminal_picker = ttk.Combobox(
+            options_row,
+            textvariable=terminal_var,
+            values=tuple(label for _key, label in TERMINAL_CHOICES),
+            state="readonly",
+            width=20,
+        )
+        terminal_picker.pack(side="left", padx=(8, 0))
     else:
-        Radiobutton(options_row, text="CMD", variable=shell_var, value=SHELL_CMD).pack(side="left")
-        Radiobutton(options_row, text="PowerShell", variable=shell_var, value=SHELL_POWERSHELL).pack(
+        ttk.Radiobutton(
+            options_row, text="CMD", variable=shell_var, value=SHELL_CMD, style=radio_style
+        ).pack(side="left")
+        ttk.Radiobutton(
+            options_row,
+            text="PowerShell",
+            variable=shell_var,
+            value=SHELL_POWERSHELL,
+            style=radio_style,
+        ).pack(
             side="left", padx=(12, 0)
         )
-    Checkbutton(options_row, text="执行后保留终端", variable=keep_var).pack(side="left", padx=(24, 0))
+    ttk.Checkbutton(
+        dialog,
+        text="执行后保留终端窗口",
+        variable=keep_var,
+        style=check_style,
+    ).grid(row=5, column=1, columnspan=2, sticky="w", padx=(0, 20), pady=(0, 8))
+    if IS_MACOS:
+        ttk.Label(
+            dialog,
+            text="终端应用仅在保留窗口时使用；自动模式优先 Ghostty。",
+            style=secondary_style,
+        ).grid(row=6, column=1, columnspan=2, sticky="w", padx=(0, 20))
 
     def _close() -> None:
         global _open_dialog
@@ -1043,13 +1164,24 @@ def show_quick_action_dialog(
             return "break"
         if action is not None:
             saved = update_quick_action(
-                action.id, location, command, keep_var.get(), shell_var.get()
+                action.id,
+                location,
+                command,
+                keep_var.get(),
+                shell_var.get(),
+                terminal_keys.get(terminal_var.get(), TERMINAL_AUTO),
             )
             if saved is None:
                 messagebox.showerror(APP_TITLE, "该快捷操作已不存在，可能已被删除。", parent=dialog)
                 return "break"
         else:
-            add_quick_action(location, command, keep_var.get(), shell_var.get())
+            add_quick_action(
+                location,
+                command,
+                keep_var.get(),
+                shell_var.get(),
+                terminal_keys.get(terminal_var.get(), TERMINAL_AUTO),
+            )
         if on_saved:
             on_saved()
         _close()
@@ -1064,12 +1196,12 @@ def show_quick_action_dialog(
         event.widget.tag_add("sel", "1.0", "end-1c")
         return "break"
 
-    button_row = 5
-    Button(dialog, text="确定", width=8, command=_save).grid(
-        row=button_row, column=1, sticky="e", padx=(0, 8), pady=(8, 16)
+    button_row = 7 if IS_MACOS else 6
+    ttk.Button(dialog, text="确定", width=8, command=_save).grid(
+        row=button_row, column=1, sticky="e", padx=(0, 8), pady=(12, 20)
     )
-    Button(dialog, text="取消", width=8, command=_close).grid(
-        row=button_row, column=2, sticky="e", padx=(0, 16), pady=(8, 16)
+    ttk.Button(dialog, text="取消", width=8, command=_close).grid(
+        row=button_row, column=2, sticky="e", padx=(0, 20), pady=(12, 20)
     )
 
     dialog.columnconfigure(1, weight=1)
@@ -1083,7 +1215,7 @@ def show_quick_action_dialog(
     dialog.bind("<Escape>", lambda _event: _close())
 
     dialog.update_idletasks()
-    width, height = 560, 400
+    width, height = (640, 480) if IS_MACOS else (560, 400)
     x = (dialog.winfo_screenwidth() - width) // 2
     y = (dialog.winfo_screenheight() - height) // 2
     dialog.geometry(f"{width}x{height}+{x}+{y}")

@@ -21,6 +21,7 @@ from ddtool.config import (
     replace_config,
 )
 from ddtool.icon import create_tray_icon
+from ddtool.macos_ui import hide_dock_icon
 from ddtool.platform import IS_MACOS, IS_WINDOWS
 from ddtool.phone_forward import ForwardController
 from ddtool.quick_actions import (
@@ -48,6 +49,7 @@ class DDToolTrayApp:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.withdraw()
+        hide_dock_icon()
         ico = bundled_icon_ico()
         if IS_WINDOWS and ico.exists():
             self.root.iconbitmap(default=str(ico))
