@@ -1,5 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+
+app_version = os.environ.get('DDTOOL_VERSION', '0.0.0').lstrip('v')
+
 
 a = Analysis(
     ['src/ddtool/__main__.py'],
@@ -49,6 +54,8 @@ app = BUNDLE(
     bundle_identifier='com.ddtool.app',
     info_plist={
         'CFBundleDisplayName': '豆荚工具',
+        'CFBundleShortVersionString': app_version,
+        'CFBundleVersion': app_version,
         'LSUIElement': True,
         'NSAppleEventsUsageDescription': '豆荚工具需要使用系统事件执行锁屏操作。',
     },

@@ -5,6 +5,7 @@ import threading
 from datetime import date
 from pathlib import Path
 from tkinter import Tk, filedialog, messagebox
+from typing import Callable
 
 import pystray
 from pystray import Menu, MenuItem
@@ -74,6 +75,20 @@ class DDToolTrayApp:
         threading.Thread(target=self.icon.run, daemon=True).start()
         self.root.mainloop()
 
+    def _run_on_ui(self, callback: Callable[[], None]) -> None:
+        """Run a tray callback safely on Tk's UI thread.
+
+        Cocoa invokes status-menu callbacks on the macOS main thread already.
+        Scheduling those callbacks again with ``Tk.after`` can leave a Tcl
+        timer pointing at Python while NSApplication is shutting down, which
+        aborts the process in ``PyEval_RestoreThread``.  Windows pystray
+        callbacks still arrive on its worker thread and must use ``after``.
+        """
+        if IS_MACOS:
+            callback()
+            return
+        self.root.after(0, callback)
+
     @staticmethod
     def _notify(icon: pystray.Icon, message: str) -> None:
         try:
@@ -84,16 +99,16 @@ class DDToolTrayApp:
     # -- 手机菜单回调 ------------------------------------------------
 
     def _mirror_phone(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, self.mirror.start)
+        self._run_on_ui(self.mirror.start)
 
     def _install_mcp(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, self.forward.install)
+        self._run_on_ui(self.forward.install)
 
     def _start_network(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, self.network.start)
+        self._run_on_ui(self.network.start)
 
     def _stop_network(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, self._stop_network_on_ui)
+        self._run_on_ui(self._stop_network_on_ui)
 
     def _stop_network_on_ui(self) -> None:
         self.network.stop()
@@ -181,13 +196,13 @@ class DDToolTrayApp:
                 yield MenuItem(value.name, self._make_run_quick_action(value))
 
     def _add_quick_action(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, lambda: self._open_add_quick_action_dialog(icon))
+        self._run_on_ui(lambda: self._open_add_quick_action_dialog(icon))
 
     def _open_add_quick_action_dialog(self, icon: pystray.Icon) -> None:
         show_add_quick_action_dialog(self.root, icon.update_menu)
 
     def _reorder_quick_actions(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, lambda: self._open_reorder_quick_actions_dialog(icon))
+        self._run_on_ui(lambda: self._open_reorder_quick_actions_dialog(icon))
 
     def _open_reorder_quick_actions_dialog(self, icon: pystray.Icon) -> None:
         show_reorder_quick_actions_dialog(self.root, icon.update_menu)
@@ -197,7 +212,7 @@ class DDToolTrayApp:
             if action.command == BUILTIN_COMMAND_POSTPONE_LOCK:
                 self._postpone_lock_screen(icon, item)
                 return
-            self.root.after(0, lambda a=action: run_quick_action(a))
+            self._run_on_ui(lambda a=action: run_quick_action(a))
 
         return _run
 
@@ -206,18 +221,17 @@ class DDToolTrayApp:
         try:
             set_autostart_enabled(enable)
         except OSError as exc:
-            self.root.after(
-                0,
-                lambda: messagebox.showerror(APP_TITLE, f"设置开机启动失败：\n{exc}"),
+            self._run_on_ui(
+                lambda: messagebox.showerror(APP_TITLE, f"设置开机启动失败：\n{exc}")
             )
             return
         self._notify(icon, "已开启开机启动" if enable else "已关闭开机启动")
 
     def _export_settings(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, lambda: self._export_settings_on_ui(icon))
+        self._run_on_ui(lambda: self._export_settings_on_ui(icon))
 
     def _import_settings(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self.root.after(0, lambda: self._import_settings_on_ui(icon))
+        self._run_on_ui(lambda: self._import_settings_on_ui(icon))
 
     def _pick_settings_file(self, *, save: bool) -> str:
         self.root.attributes("-topmost", True)
@@ -299,6 +313,14 @@ class DDToolTrayApp:
         self.network.stop()
         self.mirror.stop()
         self.lock_screen.cancel()
+        if IS_MACOS:
+            # icon.stop() stops the shared NSApplication.  With Tk owning that
+            # same Cocoa loop, stopping it before a queued root.destroy callback
+            # lets Tcl call into an already-finalizing Python interpreter.
+            icon.visible = False
+            self.root.quit()
+            self.root.destroy()
+            return
         icon.stop()
         self.root.after(0, self.root.destroy)
 

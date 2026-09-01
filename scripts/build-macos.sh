@@ -11,6 +11,7 @@ fi
 
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
+export DDTOOL_VERSION="${DDTOOL_VERSION:-${GITHUB_REF_NAME:-0.0.0}}"
 .venv/bin/pyinstaller --noconfirm --clean DDTool-macos.spec
 
 rm -f "dist/豆荚工具.dmg"

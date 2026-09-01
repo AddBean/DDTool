@@ -4,10 +4,11 @@ import plistlib
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from ddtool import autostart
 from ddtool.quick_actions import MACOS_QUICK_ACTIONS, SHELL_ZSH
+from ddtool.tray_app import DDToolTrayApp
 
 
 class CrossPlatformTests(unittest.TestCase):
@@ -30,6 +31,40 @@ class CrossPlatformTests(unittest.TestCase):
                 self.assertTrue(payload["RunAtLoad"])
                 autostart.set_enabled(False)
                 self.assertFalse(target.exists())
+
+    def test_macos_tray_callback_runs_without_tk_after(self) -> None:
+        app = DDToolTrayApp.__new__(DDToolTrayApp)
+        app.root = MagicMock()
+        callback = MagicMock()
+        with patch("ddtool.tray_app.IS_MACOS", True):
+            app._run_on_ui(callback)
+        callback.assert_called_once_with()
+        app.root.after.assert_not_called()
+
+    def test_windows_tray_callback_uses_tk_after(self) -> None:
+        app = DDToolTrayApp.__new__(DDToolTrayApp)
+        app.root = MagicMock()
+        callback = MagicMock()
+        with patch("ddtool.tray_app.IS_MACOS", False):
+            app._run_on_ui(callback)
+        callback.assert_not_called()
+        app.root.after.assert_called_once_with(0, callback)
+
+    def test_macos_quit_does_not_schedule_tk_callback(self) -> None:
+        app = DDToolTrayApp.__new__(DDToolTrayApp)
+        app.root = MagicMock()
+        app.forward = MagicMock()
+        app.network = MagicMock()
+        app.mirror = MagicMock()
+        app.lock_screen = MagicMock()
+        icon = MagicMock()
+        with patch("ddtool.tray_app.IS_MACOS", True):
+            app._quit(icon, MagicMock())
+        self.assertFalse(icon.visible)
+        icon.stop.assert_not_called()
+        app.root.after.assert_not_called()
+        app.root.quit.assert_called_once_with()
+        app.root.destroy.assert_called_once_with()
 
 
 if __name__ == "__main__":

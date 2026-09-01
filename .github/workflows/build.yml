@@ -70,4 +70,5 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release create "$GITHUB_REF_NAME" release-assets/* SHA256SUMS.txt --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
