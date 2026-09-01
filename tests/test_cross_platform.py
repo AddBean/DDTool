@@ -14,6 +14,8 @@ from ddtool.quick_actions import (
     TERMINAL_AUTO,
     TERMINAL_GHOSTTY,
     QuickAction,
+    bind_context_menu,
+    context_menu_events,
     macos_terminal_launch_args,
 )
 from ddtool.tray_app import DDToolTrayApp
@@ -49,6 +51,23 @@ class CrossPlatformTests(unittest.TestCase):
         palette = macos_palette()
         self.assertEqual(palette.window, "systemWindowBackgroundColor")
         self.assertEqual(palette.text, "systemLabelColor")
+
+    def test_macos_context_menu_supports_trackpad_and_control_click(self) -> None:
+        with patch("ddtool.quick_actions.IS_MACOS", True):
+            self.assertEqual(
+                context_menu_events(),
+                ("<Button-2>", "<Button-3>", "<Control-Button-1>"),
+            )
+
+    def test_context_menu_binds_every_macos_gesture(self) -> None:
+        widget = MagicMock()
+        handler = MagicMock()
+        with patch("ddtool.quick_actions.IS_MACOS", True):
+            bind_context_menu(widget, handler)
+        self.assertEqual(widget.bind.call_count, 3)
+        widget.bind.assert_any_call("<Button-2>", handler, add="+")
+        widget.bind.assert_any_call("<Button-3>", handler, add="+")
+        widget.bind.assert_any_call("<Control-Button-1>", handler, add="+")
 
     def test_launch_agent_is_valid_plist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

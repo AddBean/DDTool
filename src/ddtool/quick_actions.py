@@ -42,6 +42,20 @@ TERMINAL_CHOICES = (
 DEFAULT_SHELL = SHELL_ZSH if IS_MACOS else SHELL_CMD
 
 
+def context_menu_events() -> tuple[str, ...]:
+    """Return pointer gestures that open a context menu on this platform."""
+    if IS_MACOS:
+        # Aqua Tk reports a trackpad/two-finger click as Button-2 on some
+        # versions, Button-3 on others; Control-click remains Button-1.
+        return ("<Button-2>", "<Button-3>", "<Control-Button-1>")
+    return ("<Button-3>",)
+
+
+def bind_context_menu(widget: Any, handler: Callable[[Any], str]) -> None:
+    for sequence in context_menu_events():
+        widget.bind(sequence, handler, add="+")
+
+
 @dataclass(slots=True)
 class QuickAction:
     id: str
@@ -933,7 +947,7 @@ def show_reorder_quick_actions_dialog(
             tree.insert("", "end", iid="empty", text="（暂无快捷操作）", tags=("locked",))
 
     def _edit_action(iid: str) -> None:
-        if not iid.startswith("action:") or _is_preset(iid):
+        if not iid.startswith("action:"):
             return
         action = actions_by_id.get(_action_id(iid))
         if action is None:
@@ -966,16 +980,25 @@ def show_reorder_quick_actions_dialog(
             tree.insert("", "end", iid="empty", text="（暂无快捷操作）", tags=("locked",))
         _persist()
 
-    def _on_right_click(event: Any) -> None:
+    def _on_right_click(event: Any) -> str:
         iid = tree.identify_row(event.y)
         if not iid or not tree.exists(iid) or iid == "empty":
-            return
+            return "break"
         tree.selection_set(iid)
-        if iid.startswith("action:") and not _is_preset(iid):
-            menu = tk.Menu(dialog, tearoff=0)
+        menu = tk.Menu(dialog, tearoff=0)
+        if iid.startswith("action:"):
             menu.add_command(label="编辑", command=lambda: _edit_action(iid))
-            menu.add_command(label="删除", command=lambda: _delete_action(iid))
+            if _is_preset(iid):
+                menu.add_command(label="内置操作不可删除", state="disabled")
+            else:
+                menu.add_command(label="删除", command=lambda: _delete_action(iid))
+        else:
+            menu.add_command(label="文件夹由其中的操作自动管理", state="disabled")
+        try:
             menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
 
     def _close() -> None:
         global _reorder_dialog
@@ -988,7 +1011,7 @@ def show_reorder_quick_actions_dialog(
     tree.bind("<B1-Motion>", _on_motion)
     tree.bind("<ButtonRelease-1>", _on_release)
     tree.bind("<MouseWheel>", _on_wheel)
-    tree.bind("<ButtonPress-3>", _on_right_click)
+    bind_context_menu(tree, _on_right_click)
 
     ttk.Button(dialog, text="完成", width=8, command=_close).grid(
         row=2, column=1, sticky="e", padx=16, pady=(8, 16)
