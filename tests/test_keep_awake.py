@@ -50,14 +50,36 @@ class KeepAwakeTests(unittest.TestCase):
             patch.object(controller, "_clear_os_assertion"),
             patch("ddtool.keep_awake._perform_end_action") as perform,
         ):
-            controller.start(2, EndAction.LOCK)
+            controller.start(2, EndAction.LOCK, allow_display_off=True)
             self.assertTrue(controller.is_active)
             status = controller.status()
             self.assertTrue(status.active)
+            self.assertTrue(status.allow_display_off)
             self.assertGreaterEqual(status.remaining_seconds, 1)
             controller.stop(run_end_action=False)
             self.assertFalse(controller.is_active)
             perform.assert_not_called()
+
+    def test_status_tracks_display_off_option(self) -> None:
+        controller = KeepAwakeController()
+        with (
+            patch.object(controller, "_begin_os_assertion") as begin,
+            patch.object(controller, "_refresh_os_assertion"),
+            patch.object(controller, "_clear_os_assertion"),
+            patch("ddtool.keep_awake._turn_display_off"),
+            patch("ddtool.keep_awake.time.sleep"),
+        ):
+            controller.start(30, EndAction.DEFAULT, allow_display_off=True)
+            self.assertTrue(controller.status().allow_display_off)
+            self.assertIn("允许黑屏", controller.status().message)
+            # Worker may already have started; give it a tick to call begin.
+            for _ in range(20):
+                if begin.called:
+                    break
+                controller._stop.wait(0.01)
+            controller.stop(run_end_action=False)
+        self.assertTrue(begin.called)
+        self.assertTrue(begin.call_args.kwargs.get("allow_display_off"))
 
 
 if __name__ == "__main__":

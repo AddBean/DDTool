@@ -126,7 +126,13 @@ class DDToolTrayApp:
         self._notify(icon, "已推迟 1 小时后自动锁屏")
 
     def _open_keep_awake(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(lambda: show_keep_awake_dialog(self.root, self.keep_awake))
+        self._run_on_ui(
+            lambda: show_keep_awake_dialog(
+                self.root,
+                self.keep_awake,
+                on_changed=icon.update_menu,
+            )
+        )
 
     # -- 快捷操作 ---------------------------------------------------
 
@@ -200,6 +206,12 @@ class DDToolTrayApp:
         for kind, value in node.entries:
             if kind == "menu":
                 yield MenuItem(value, Menu(self._make_node_menu(node.children[value])))
+            elif value.command == BUILTIN_COMMAND_KEEP_AWAKE:
+                yield MenuItem(
+                    value.name,
+                    self._make_run_quick_action(value),
+                    checked=lambda _item: self.keep_awake.is_active,
+                )
             else:
                 yield MenuItem(value.name, self._make_run_quick_action(value))
 
