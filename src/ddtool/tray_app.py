@@ -24,11 +24,13 @@ from ddtool.icon import create_tray_icon
 from ddtool.macos_ui import hide_dock_icon
 from ddtool.platform import IS_MACOS, IS_WINDOWS
 from ddtool.phone_forward import ForwardController
+from ddtool.keep_awake import get_keep_awake_controller, show_keep_awake_dialog
 from ddtool.quick_actions import (
+    BUILTIN_COMMAND_KEEP_AWAKE,
     BUILTIN_COMMAND_POSTPONE_LOCK,
     BUILTIN_TOP_MENUS,
     SETTINGS_MENU,
-    SYSTEM_SHORTCUTS_MENU,
+    SYSTEM_COMMANDS_MENU,
     MenuTree,
     QuickAction,
     build_action_tree,
@@ -60,6 +62,7 @@ class DDToolTrayApp:
         self.forward = ForwardController(config)
         self.network = NetworkController(config)
         self.lock_screen = LockScreenDelayer()
+        self.keep_awake = get_keep_awake_controller()
         self.icon = pystray.Icon(
             APP_NAME,
             create_tray_icon(),
@@ -122,6 +125,9 @@ class DDToolTrayApp:
         self.lock_screen.postpone()
         self._notify(icon, "已推迟 1 小时后自动锁屏")
 
+    def _open_keep_awake(self, icon: pystray.Icon, _item: MenuItem) -> None:
+        self._run_on_ui(lambda: show_keep_awake_dialog(self.root, self.keep_awake))
+
     # -- 快捷操作 ---------------------------------------------------
 
     def _tray_menu_items(self):
@@ -139,11 +145,11 @@ class DDToolTrayApp:
         if has_custom:
             yield Menu.SEPARATOR
         yield MenuItem("手机操作", Menu(self._make_phone_menu(tree)))
-        system_node = tree.children.get(SYSTEM_SHORTCUTS_MENU)
+        system_node = tree.children.get(SYSTEM_COMMANDS_MENU)
         if system_node and system_node.has_items:
-            yield MenuItem(SYSTEM_SHORTCUTS_MENU, Menu(self._make_node_menu(system_node)))
+            yield MenuItem(SYSTEM_COMMANDS_MENU, Menu(self._make_node_menu(system_node)))
         else:
-            yield MenuItem(SYSTEM_SHORTCUTS_MENU, Menu(self._empty_menu))
+            yield MenuItem(SYSTEM_COMMANDS_MENU, Menu(self._empty_menu))
         yield MenuItem("快捷操作", Menu(self._make_quick_menu()))
         yield MenuItem(SETTINGS_MENU, Menu(self._make_settings_menu()))
         yield MenuItem("退出", self._quit)
@@ -213,6 +219,9 @@ class DDToolTrayApp:
         def _run(icon: pystray.Icon, item: MenuItem) -> None:
             if action.command == BUILTIN_COMMAND_POSTPONE_LOCK:
                 self._postpone_lock_screen(icon, item)
+                return
+            if action.command == BUILTIN_COMMAND_KEEP_AWAKE:
+                self._open_keep_awake(icon, item)
                 return
             self._run_on_ui(lambda a=action: run_quick_action(a))
 
@@ -315,6 +324,7 @@ class DDToolTrayApp:
         self.network.stop()
         self.mirror.stop()
         self.lock_screen.cancel()
+        self.keep_awake.stop(run_end_action=False)
         if IS_MACOS:
             # icon.stop() stops the shared NSApplication.  With Tk owning that
             # same Cocoa loop, stopping it before a queued root.destroy callback

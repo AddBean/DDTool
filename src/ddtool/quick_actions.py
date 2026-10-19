@@ -19,13 +19,16 @@ from ddtool.platform import IS_MACOS
 _open_dialog: Toplevel | None = None
 _reorder_dialog: Toplevel | None = None
 DEFAULT_MENU_NAME = "快捷操作"
-SYSTEM_SHORTCUTS_MENU = "系统快捷"
+LEGACY_SYSTEM_SHORTCUTS_MENU = "系统快捷"
+SYSTEM_COMMANDS_MENU = "系统命令"
+SYSTEM_SHORTCUTS_MENU = SYSTEM_COMMANDS_MENU  # 兼容旧导入名
 SETTINGS_MENU = "工具设置"
 RESERVED_TOP_MENUS = frozenset({"退出", SETTINGS_MENU})
-BUILTIN_TOP_MENUS = (DEFAULT_MENU_NAME, "手机操作", SYSTEM_SHORTCUTS_MENU, SETTINGS_MENU)
-FIXED_TRAY_MENUS = ("手机操作", SYSTEM_SHORTCUTS_MENU, DEFAULT_MENU_NAME, SETTINGS_MENU, "退出")
-LOCKED_MENU_ROOTS = frozenset({SYSTEM_SHORTCUTS_MENU, "手机操作"})
+BUILTIN_TOP_MENUS = (DEFAULT_MENU_NAME, "手机操作", SYSTEM_COMMANDS_MENU, SETTINGS_MENU)
+FIXED_TRAY_MENUS = ("手机操作", SYSTEM_COMMANDS_MENU, DEFAULT_MENU_NAME, SETTINGS_MENU, "退出")
+LOCKED_MENU_ROOTS = frozenset({SYSTEM_COMMANDS_MENU, "手机操作"})
 BUILTIN_COMMAND_POSTPONE_LOCK = "ddtool:postpone-lock"
+BUILTIN_COMMAND_KEEP_AWAKE = "ddtool:keep-awake"
 SHELL_CMD = "cmd"
 SHELL_POWERSHELL = "powershell"
 SHELL_ZSH = "zsh"
@@ -154,7 +157,7 @@ def collect_menu_paths(actions: list[QuickAction]) -> list[str]:
             seen.add(path)
             found.append(path)
 
-    _add(SYSTEM_SHORTCUTS_MENU)
+    _add(SYSTEM_COMMANDS_MENU)
     for action in actions:
         parts = parse_menu_path(action.menu_path)
         for index in range(len(parts)):
@@ -170,28 +173,30 @@ def build_action_tree(actions: list[QuickAction]) -> MenuTree:
 
 
 WINDOWS_QUICK_ACTIONS = (
-    QuickAction("preset-postpone-lock", "推迟锁屏", BUILTIN_COMMAND_POSTPONE_LOCK, False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-ipconfig", "查看 IP", "ipconfig", True, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-flushdns", "刷新 DNS", "ipconfig /flushdns", True, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-netstat", "查看端口占用", "netstat -ano", True, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-ncpa", "网络连接", "ncpa.cpl", False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-devmgmt", "设备管理器", "devmgmt.msc", False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-taskmgr", "任务管理器", "taskmgr", False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-env", "系统环境变量", "rundll32.exe sysdm.cpl,EditEnvironmentVariables", False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-explorer", "重启资源管理器", "taskkill /f /im explorer.exe & start explorer.exe", False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-hosts", "打开 hosts", r"notepad %SystemRoot%\System32\drivers\etc\hosts", False, SYSTEM_SHORTCUTS_MENU),
-    QuickAction("preset-powershell", "打开 PowerShell", "start powershell", False, SYSTEM_SHORTCUTS_MENU),
+    QuickAction("preset-keep-awake", "防睡眠", BUILTIN_COMMAND_KEEP_AWAKE, False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-postpone-lock", "推迟锁屏", BUILTIN_COMMAND_POSTPONE_LOCK, False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-ipconfig", "查看 IP", "ipconfig", True, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-flushdns", "刷新 DNS", "ipconfig /flushdns", True, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-netstat", "查看端口占用", "netstat -ano", True, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-ncpa", "网络连接", "ncpa.cpl", False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-devmgmt", "设备管理器", "devmgmt.msc", False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-taskmgr", "任务管理器", "taskmgr", False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-env", "系统环境变量", "rundll32.exe sysdm.cpl,EditEnvironmentVariables", False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-explorer", "重启资源管理器", "taskkill /f /im explorer.exe & start explorer.exe", False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-hosts", "打开 hosts", r"notepad %SystemRoot%\System32\drivers\etc\hosts", False, SYSTEM_COMMANDS_MENU),
+    QuickAction("preset-powershell", "打开 PowerShell", "start powershell", False, SYSTEM_COMMANDS_MENU),
 )
 
 MACOS_QUICK_ACTIONS = (
-    QuickAction("preset-postpone-lock", "推迟锁屏", BUILTIN_COMMAND_POSTPONE_LOCK, False, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-ifconfig", "查看 IP", "ifconfig", True, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-flushdns-macos", "刷新 DNS", "sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder", True, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-netstat-macos", "查看端口占用", "lsof -nP -iTCP -sTCP:LISTEN", True, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-network-settings-macos", "网络设置", "open 'x-apple.systempreferences:com.apple.Network-Settings.extension'", False, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-activity-monitor", "活动监视器", "open -a 'Activity Monitor'", False, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-hosts-macos", "打开 hosts", "open -a TextEdit /etc/hosts", False, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
-    QuickAction("preset-terminal", "打开终端", "open -a Terminal", False, SYSTEM_SHORTCUTS_MENU, SHELL_ZSH),
+    QuickAction("preset-keep-awake", "防睡眠", BUILTIN_COMMAND_KEEP_AWAKE, False, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-postpone-lock", "推迟锁屏", BUILTIN_COMMAND_POSTPONE_LOCK, False, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-ifconfig", "查看 IP", "ifconfig", True, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-flushdns-macos", "刷新 DNS", "sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder", True, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-netstat-macos", "查看端口占用", "lsof -nP -iTCP -sTCP:LISTEN", True, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-network-settings-macos", "网络设置", "open 'x-apple.systempreferences:com.apple.Network-Settings.extension'", False, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-activity-monitor", "活动监视器", "open -a 'Activity Monitor'", False, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-hosts-macos", "打开 hosts", "open -a TextEdit /etc/hosts", False, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
+    QuickAction("preset-terminal", "打开终端", "open -a Terminal", False, SYSTEM_COMMANDS_MENU, SHELL_ZSH),
 )
 
 DEFAULT_QUICK_ACTIONS = MACOS_QUICK_ACTIONS if IS_MACOS else WINDOWS_QUICK_ACTIONS
@@ -312,13 +317,45 @@ def _relocate_presets(actions: list[QuickAction]) -> tuple[list[QuickAction], bo
     return updated, changed
 
 
+def _migrate_system_menu_name(actions: list[QuickAction]) -> tuple[list[QuickAction], bool]:
+    """Rename legacy「系统快捷」menu paths to「系统命令」."""
+    changed = False
+    updated: list[QuickAction] = []
+    legacy = LEGACY_SYSTEM_SHORTCUTS_MENU
+    target = SYSTEM_COMMANDS_MENU
+    for action in actions:
+        path = action.menu_path
+        if path == legacy or path.startswith(f"{legacy}/"):
+            new_path = target + path[len(legacy) :]
+            action = QuickAction(
+                id=action.id,
+                name=action.name,
+                command=action.command,
+                keep_terminal=action.keep_terminal,
+                menu_path=new_path,
+                shell=action.shell,
+                terminal=action.terminal,
+            )
+            changed = True
+        updated.append(action)
+    return updated, changed
+
+
 def load_quick_actions() -> list[QuickAction]:
     actions, seeded_presets, migrated, newest_first = _read_store()
+    actions, renamed = _migrate_system_menu_name(actions)
     actions, relocated = _relocate_presets(actions)
     actions, seeded_presets, changed = _merge_presets(actions, seeded_presets)
     if not newest_first:
         actions = _custom_newest_first(actions)
-    if relocated or changed or migrated or not newest_first or not get_quick_actions_path().exists():
+    if (
+        renamed
+        or relocated
+        or changed
+        or migrated
+        or not newest_first
+        or not get_quick_actions_path().exists()
+    ):
         _write_store(actions, seeded_presets)
     return actions
 
