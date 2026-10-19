@@ -8,6 +8,7 @@
 - 安装手机 MCP：通过 `adb forward` 映射手机端口，并写入 Cursor、Claude Code 和 Codex 配置
 - 共享网络：使用 `gnirehtet` 通过 USB 将电脑网络共享给手机
 - 推迟锁屏：一小时后自动锁定电脑，可重复点击重新计时
+- 防睡眠：指定时长阻止自动睡眠/锁屏（适合长时间后台下载），到期后可恢复默认、锁屏或关机
 - 快捷操作：维护多级菜单并运行 CMD、PowerShell 或 zsh 命令
 - 配置管理：导入、导出配置以及登录时自动启动
 
@@ -136,10 +137,11 @@ src/ddtool/
 ├── platform.py       # 平台检测及公共平台辅助函数
 ├── autostart.py      # Windows 注册表 / macOS LaunchAgent
 ├── system_lock.py    # 延迟锁屏
+├── keep_awake.py     # 防睡眠与到期动作
 ├── phone_mirror.py   # scrcpy
 ├── phone_forward.py  # ADB 映射与 MCP 配置
 ├── phone_network.py  # gnirehtet 网络共享
-├── quick_actions.py  # 快捷操作管理和执行
+├── quick_actions.py  # 快捷操作 / 系统命令管理和执行
 └── config.py         # 配置读写
 ```
 

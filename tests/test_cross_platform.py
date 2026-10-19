@@ -110,6 +110,7 @@ class CrossPlatformTests(unittest.TestCase):
         app.network = MagicMock()
         app.mirror = MagicMock()
         app.lock_screen = MagicMock()
+        app.keep_awake = MagicMock()
         icon = MagicMock()
         with patch("ddtool.tray_app.IS_MACOS", True):
             app._quit(icon, MagicMock())
@@ -118,6 +119,7 @@ class CrossPlatformTests(unittest.TestCase):
         app.root.after.assert_not_called()
         app.root.quit.assert_called_once_with()
         app.root.destroy.assert_called_once_with()
+        app.keep_awake.stop.assert_called_once_with(run_end_action=False)
 
 
 if __name__ == "__main__":
