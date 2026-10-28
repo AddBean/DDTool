@@ -331,8 +331,9 @@ def show_keep_awake_dialog(
     _open_dialog = dialog
     dialog.title("防睡眠")
     dialog.minsize(440, 420)
-    # Non-modal utility window: can be minimized / put away while the session keeps running.
-    dialog.transient(parent)
+    # Non-modal, independent top-level window. Do NOT call transient(parent): transient
+    # windows have no minimize button on Windows and get hidden/unminimizable on macOS.
+    dialog.resizable(True, True)
     configure_dialog(dialog)
 
     label_style = "DDTool.TLabel" if IS_MACOS else "TLabel"
@@ -447,6 +448,12 @@ def show_keep_awake_dialog(
             _open_dialog = None
         dialog.destroy()
 
+    def _minimize() -> None:
+        try:
+            dialog.iconify()
+        except TclError:
+            dialog.withdraw()
+
     def _on_controller_changed() -> None:
         try:
             if dialog.winfo_exists():
@@ -482,7 +489,8 @@ def show_keep_awake_dialog(
     buttons.grid(row=5, column=0, columnspan=3, sticky="e", padx=20, pady=(20, 18))
     ttk.Button(buttons, text="开始", width=8, command=_start).pack(side="left", padx=(0, 8))
     ttk.Button(buttons, text="停止", width=8, command=_stop).pack(side="left", padx=(0, 8))
-    ttk.Button(buttons, text="收起", width=8, command=_close).pack(side="left")
+    ttk.Button(buttons, text="最小化", width=8, command=_minimize).pack(side="left", padx=(0, 8))
+    ttk.Button(buttons, text="关闭", width=8, command=_close).pack(side="left")
 
     dialog.columnconfigure(1, weight=1)
     dialog.protocol("WM_DELETE_WINDOW", _close)
