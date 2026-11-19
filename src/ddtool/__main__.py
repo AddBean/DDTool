@@ -5,7 +5,6 @@ import sys
 from ddtool.config import APP_TITLE, load_config
 from ddtool.icon import create_tray_icon
 from ddtool.phone_mirror import check_scrcpy, resolve_scrcpy_path, run_mirror_smoke_test
-from ddtool.tray_app import main
 
 
 def smoke_test() -> int:
@@ -27,8 +26,14 @@ def smoke_test() -> int:
 
 
 if __name__ == "__main__":
-    if "--smoke-test" in sys.argv:
+    if sys.argv[1:] == ["--smoke-test"]:
         raise SystemExit(smoke_test())
-    if "--mirror-smoke-test" in sys.argv:
+    if sys.argv[1:] == ["--mirror-smoke-test"]:
         raise SystemExit(run_mirror_smoke_test(load_config()))
-    main()
+    if sys.argv[1:] == ["--ui-smoke-test"]:
+        from ddtool.tray_app import ui_smoke_test
+
+        raise SystemExit(ui_smoke_test())
+    from ddtool.tray_app import main
+
+    raise SystemExit(main())

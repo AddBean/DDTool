@@ -14,13 +14,14 @@ jobs:
   build:
     env:
       PYTHONPATH: src
+      PIP_INDEX_URL: https://pypi.org/simple
     strategy:
       matrix:
         include:
           - os: windows-latest
             artifact: DDTool-windows
-            asset: dist/DDTool-Windows-x64.exe
-          - os: macos-14
+            asset: dist/DDTool-Windows-x64.zip
+          - os: macos-15
             artifact: DDTool-macos-arm64
             asset: dist/DDTool-macOS-arm64.dmg
     runs-on: ${{ matrix.os }}
@@ -33,6 +34,7 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q src tests
+      - run: python -m ddtool --ui-smoke-test
       - name: Build Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -40,10 +42,21 @@ jobs:
       - name: Build macOS
         if: runner.os == 'macOS'
         run: zsh ./scripts/build-macos.sh
-      - name: Prepare Windows release asset
+      - name: Smoke-test the Windows package
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Copy-Item -LiteralPath 'dist\豆荚工具.exe' -Destination 'dist\DDTool-Windows-x64.exe'
+        run: |
+          $env:DDTOOL_UI_SMOKE_RESULT = Join-Path $env:RUNNER_TEMP 'ddtool-ui-smoke.txt'
+          $exe = Start-Process -FilePath 'dist\DDTool\DDTool.exe' -ArgumentList '--ui-smoke-test' -PassThru -Wait
+          if (!(Test-Path $env:DDTOOL_UI_SMOKE_RESULT)) { throw 'No packaged UI smoke result' }
+          $result = Get-Content -Raw $env:DDTOOL_UI_SMOKE_RESULT
+          if ($exe.ExitCode -ne 0 -or $result.Trim() -ne 'OK') { throw "Packaged UI smoke failed: $result" }
+      - name: Smoke-test the macOS package
+        if: runner.os == 'macOS'
+        run: |
+          export DDTOOL_UI_SMOKE_RESULT="$RUNNER_TEMP/ddtool-ui-smoke.txt"
+          'dist/豆荚工具.app/Contents/MacOS/DDTool' --ui-smoke-test
+          test "$(cat "$DDTOOL_UI_SMOKE_RESULT")" = 'OK'
       - name: Prepare macOS release asset
         if: runner.os == 'macOS'
         run: cp 'dist/豆荚工具.dmg' 'dist/DDTool-macOS-arm64.dmg'

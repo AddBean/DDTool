@@ -4,11 +4,11 @@ import json
 import re
 import subprocess
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from tkinter import messagebox
 
-from ddtool.config import APP_TITLE, AppConfig
+from ddtool.config import AppConfig
+from ddtool.notices import Reporter
 from ddtool.platform import subprocess_creation_flags
 from ddtool.resources import find_executable
 
@@ -31,18 +31,19 @@ CODEX_MCP_CONFIG = Path.home() / ".codex" / "config.toml"
 @dataclass(slots=True)
 class ForwardController:
     config: AppConfig
+    reporter: Reporter = field(default_factory=Reporter, kw_only=True)
     _active: bool = False
 
     def install(self) -> None:
         """映射端口 + 安装 MCP 配置到 Cursor / ChatGPT / Claude Code"""
         adb = _find_adb()
         if not adb:
-            messagebox.showerror(APP_TITLE, "没有找到 adb，请确保 adb 在系统 PATH 中。")
+            self.reporter.error("没有找到 adb，请确保 adb 在系统 PATH 中。")
             return
 
         device_error = _check_adb_device(adb)
         if device_error:
-            messagebox.showerror(APP_TITLE, device_error)
+            self.reporter.error(device_error)
             return
 
         local = self.config.forward_local_port or 19999
@@ -58,23 +59,19 @@ class ForwardController:
         codex_installed = _is_codex_mcp_installed(CODEX_MCP_CONFIG, name, url)
 
         if forward_active and not pending_json and codex_installed:
-            messagebox.showinfo(
-                APP_TITLE,
-                "MCP 已安装且端口映射正常，无需重复安装。",
-            )
+            self.reporter.info("MCP 已安装且端口映射正常，无需重复安装。")
             self._active = True
             return
 
         if not forward_active:
-            if not _setup_forward(adb, local, phone):
+            if not _setup_forward(adb, local, phone, self.reporter):
                 return
             self._active = True
         else:
             self._active = True
 
         if not pending_json and codex_installed:
-            messagebox.showinfo(
-                APP_TITLE,
+            self.reporter.info(
                 f"端口映射已启用：手机 {phone} → 本机 {local}\n\n"
                 "MCP 配置已存在，无需重复安装。",
             )
@@ -127,7 +124,8 @@ class ForwardController:
             for item in failed:
                 lines.append(f"  {item}")
 
-        messagebox.showinfo(APP_TITLE, "\n".join(lines))
+        report = self.reporter.error if failed else self.reporter.info
+        report("\n".join(lines))
 
     def stop(self) -> None:
         if not self._active:
@@ -155,7 +153,7 @@ class ForwardController:
         self._active = False
 
 
-def _setup_forward(adb: Path, local: int, phone: int) -> bool:
+def _setup_forward(adb: Path, local: int, phone: int, reporter: Reporter) -> bool:
     try:
         result = subprocess.run(
             [str(adb), "forward", f"tcp:{local}", f"tcp:{phone}"],
@@ -166,21 +164,18 @@ def _setup_forward(adb: Path, local: int, phone: int) -> bool:
             check=False,
         )
     except FileNotFoundError:
-        messagebox.showerror(APP_TITLE, "没有找到 adb。")
+        reporter.error("没有找到 adb。")
         return False
     except subprocess.TimeoutExpired:
-        messagebox.showerror(APP_TITLE, "ADB 端口映射超时，请重试。")
+        reporter.error("ADB 端口映射超时，请重试。")
         return False
     except OSError as exc:
-        messagebox.showerror(APP_TITLE, f"ADB 端口映射失败：\n{exc}")
+        reporter.error(f"ADB 端口映射失败：\n{exc}")
         return False
 
     if result.returncode != 0:
         error = result.stderr.decode("utf-8", errors="replace").strip()
-        messagebox.showerror(
-            APP_TITLE,
-            f"端口映射失败：\n{error}" if error else "端口映射失败。",
-        )
+        reporter.error(f"端口映射失败：\n{error}" if error else "端口映射失败。")
         return False
 
     return True

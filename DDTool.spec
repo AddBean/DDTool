@@ -5,7 +5,8 @@ a = Analysis(
     ['src/ddtool/__main__.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('vendor/scrcpy-win64-v4.1', 'vendor/scrcpy-win64-v4.1'), ('assets/tray_icon.png', 'assets'), ('assets/app.ico', 'assets')],
+    datas=[('vendor/scrcpy-win64-v4.1', 'vendor/scrcpy-win64-v4.1'), ('assets/tray_icon.png', 'assets'),
+           ('assets/app.ico', 'assets'), ('src/ddtool/qml', 'ddtool/qml'), ('LICENSE', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -19,14 +20,13 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='DDTool',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -37,3 +37,5 @@ exe = EXE(
     entitlements_file=None,
     icon=['assets/app.ico'],
 )
+
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='DDTool')

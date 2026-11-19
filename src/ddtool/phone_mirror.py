@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from tkinter import messagebox
 
-from ddtool.config import APP_TITLE, AppConfig, get_config_path
+from ddtool.config import AppConfig, get_config_path
+from ddtool.notices import Reporter
 from ddtool.platform import subprocess_creation_flags
 from ddtool.resources import find_executable
 
@@ -14,17 +14,17 @@ from ddtool.resources import find_executable
 @dataclass(slots=True)
 class MirrorController:
     config: AppConfig
+    reporter: Reporter = field(default_factory=Reporter, kw_only=True)
     process: subprocess.Popen[bytes] | None = None
 
     def start(self) -> None:
         if self.process and self.process.poll() is None:
-            messagebox.showinfo(APP_TITLE, "手机镜像已经在运行。")
+            self.reporter.info("手机镜像已经在运行。")
             return
 
         scrcpy = resolve_scrcpy_path(self.config)
         if not scrcpy:
-            messagebox.showerror(
-                APP_TITLE,
+            self.reporter.error(
                 "没有找到 scrcpy。\n\n"
                 "程序会优先使用内置 scrcpy；如果你要使用自定义版本，"
                 f"请编辑配置文件：\n{get_config_path()}",
@@ -33,18 +33,18 @@ class MirrorController:
 
         check = check_scrcpy(scrcpy)
         if check:
-            messagebox.showerror(APP_TITLE, check)
+            self.reporter.error(check)
             return
 
         device_error = check_connected_device(scrcpy)
         if device_error:
-            messagebox.showerror(APP_TITLE, device_error)
+            self.reporter.error(device_error)
             return
 
         command = [str(scrcpy), *(self.config.scrcpy_args or [])]
 
         try:
-            self.process = subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -52,26 +52,26 @@ class MirrorController:
                 creationflags=_creation_flags(),
             )
         except FileNotFoundError:
-            messagebox.showerror(
-                APP_TITLE,
+            self.reporter.error(
                 "没有找到 scrcpy。\n\n"
                 f"请安装 scrcpy，或编辑配置文件：\n{get_config_path()}",
             )
+            return
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"启动 scrcpy 失败：\n{exc}")
+            self.reporter.error(f"启动 scrcpy 失败：\n{exc}")
+            return
 
-        if self.process:
-            try:
-                self.process.wait(timeout=1.5)
-            except subprocess.TimeoutExpired:
-                return
+        self.process = process
+        try:
+            exit_code = process.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            self.reporter.info("手机镜像已启动。")
+            return
 
-            stderr = b""
-            if self.process.stderr:
-                stderr = self.process.stderr.read()
-            message = stderr.decode("utf-8", errors="replace").strip()
-            if message:
-                messagebox.showerror(APP_TITLE, f"手机镜像启动失败：\n{message}")
+        stderr = process.stderr.read() if process.stderr else b""
+        message = stderr.decode("utf-8", errors="replace").strip()
+        detail = f"退出码 {exit_code}"
+        self.reporter.error(f"手机镜像启动后立即退出：\n{message or detail}")
 
     def stop(self) -> None:
         if not self.process or self.process.poll() is not None:

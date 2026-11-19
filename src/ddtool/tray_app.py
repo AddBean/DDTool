@@ -1,353 +1,218 @@
 from __future__ import annotations
 
-import json
-import threading
-from datetime import date
+import hashlib
+import os
+import sys
+import tempfile
 from pathlib import Path
-from tkinter import Tk, filedialog, messagebox
-from typing import Callable
 
-import pystray
-from pystray import Menu, MenuItem
+from PySide6.QtCore import QCoreApplication, QEvent, QLockFile, QMetaObject, QObject, Qt, QUrl
+from PySide6.QtGui import QIcon
+from PySide6.QtNetwork import QLocalServer
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickWindow
+from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from ddtool.autostart import is_enabled as is_autostart_enabled, set_enabled as set_autostart_enabled
-from ddtool.config import (
-    APP_NAME,
-    APP_TITLE,
-    AppConfig,
-    build_export_payload,
-    load_config,
-    parse_import_payload,
-    replace_config,
-)
-from ddtool.icon import create_tray_icon
-from ddtool.macos_ui import hide_dock_icon
-from ddtool.platform import IS_MACOS, IS_WINDOWS
-from ddtool.phone_forward import ForwardController
-from ddtool.keep_awake import get_keep_awake_controller, show_keep_awake_dialog
-from ddtool.quick_actions import (
-    BUILTIN_COMMAND_KEEP_AWAKE,
-    BUILTIN_COMMAND_POSTPONE_LOCK,
-    BUILTIN_TOP_MENUS,
-    SETTINGS_MENU,
-    SYSTEM_COMMANDS_MENU,
-    MenuTree,
-    QuickAction,
-    build_action_tree,
-    dump_quick_actions_store,
-    load_quick_actions,
-    replace_quick_actions_store,
-    run_quick_action,
-    show_add_quick_action_dialog,
-    show_reorder_quick_actions_dialog,
-)
-from ddtool.resources import bundled_icon_ico
-from ddtool.phone_mirror import MirrorController
-from ddtool.phone_network import NetworkController
-from ddtool.system_lock import LockScreenDelayer
+from ddtool.config import APP_NAME, APP_TITLE, get_config_dir
+from ddtool.local_activation import receive_activations, send_activation
+from ddtool.quick_actions import MenuTree
+from ddtool.resources import bundled_icon_png
+from ddtool.shell_shortcuts import Activation, ShortcutConfig
+from ddtool.workbench import Workbench
 
 
-class DDToolTrayApp:
-    def __init__(self) -> None:
-        self.root = Tk()
-        self.root.withdraw()
-        hide_dock_icon()
-        ico = bundled_icon_ico()
-        if IS_WINDOWS and ico.exists():
-            self.root.iconbitmap(default=str(ico))
+def build_window(bridge: Workbench, warnings: list[str] | None = None) -> tuple[QQmlApplicationEngine, QQuickWindow]:
+    QQuickStyle.setStyle("Basic")
+    engine = QQmlApplicationEngine()
+    if warnings is not None:
+        engine.warnings.connect(lambda errors: warnings.extend(error.toString() for error in errors))
+    engine.rootContext().setContextProperty("workbench", bridge)
+    engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml" / "Main.qml")))
+    roots = engine.rootObjects()
+    if not roots or not isinstance(roots[0], QQuickWindow):
+        raise RuntimeError("Could not load the DDTool workbench.")
+    return engine, roots[0]
 
-        self.root.title(APP_TITLE)
-        config = load_config()
-        self.mirror = MirrorController(config)
-        self.forward = ForwardController(config)
-        self.network = NetworkController(config)
-        self.lock_screen = LockScreenDelayer()
-        self.keep_awake = get_keep_awake_controller()
-        self.icon = pystray.Icon(
-            APP_NAME,
-            create_tray_icon(),
-            APP_TITLE,
-            Menu(self._tray_menu_items),
-        )
 
-    def run(self) -> None:
-        if IS_MACOS:
-            # Cocoa requires status-bar setup on the main thread. run_detached
-            # prepares pystray before Tk takes over the application loop.
-            self.icon.run_detached()
-            self.root.mainloop()
-            return
-        threading.Thread(target=self.icon.run, daemon=True).start()
-        self.root.mainloop()
+class Desktop:
+    def __init__(self, app: QApplication) -> None:
+        self.app = app
+        self.bridge = Workbench()
+        self.engine, self.window = build_window(self.bridge)
+        self.menu = QMenu()
+        self.tray = QSystemTrayIcon(app.windowIcon(), app)
+        self.tray.setToolTip(APP_TITLE)
+        self.tray.setContextMenu(self.menu)
+        self.tray.activated.connect(self._activate)
+        self.bridge.actionsChanged.connect(self._rebuild_menu)
+        self.bridge.navigate.connect(self.show)
+        self.window.setProperty("canHide", QSystemTrayIcon.isSystemTrayAvailable())
+        self.window.quitRequested.connect(app.quit)
+        self._rebuild_menu()
+        if self.window.property("canHide"):
+            self.tray.show()
 
-    def _run_on_ui(self, callback: Callable[[], None]) -> None:
-        """Run a tray callback safely on Tk's UI thread.
-
-        Cocoa invokes status-menu callbacks on the macOS main thread already.
-        Scheduling those callbacks again with ``Tk.after`` can leave a Tcl
-        timer pointing at Python while NSApplication is shutting down, which
-        aborts the process in ``PyEval_RestoreThread``.  Windows pystray
-        callbacks still arrive on its worker thread and must use ``after``.
-        """
-        if IS_MACOS:
-            callback()
-            return
-        self.root.after(0, callback)
-
-    @staticmethod
-    def _notify(icon: pystray.Icon, message: str) -> None:
-        try:
-            icon.notify(message, APP_TITLE)
-        except (NotImplementedError, AttributeError):
-            pass
-
-    # -- 手机菜单回调 ------------------------------------------------
-
-    def _mirror_phone(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(self.mirror.start)
-
-    def _install_mcp(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(self.forward.install)
-
-    def _start_network(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(self.network.start)
-
-    def _stop_network(self, _icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(self._stop_network_on_ui)
-
-    def _stop_network_on_ui(self) -> None:
-        self.network.stop()
-        messagebox.showinfo(APP_TITLE, "网络共享已停止。")
-
-    # -- 系统功能 ---------------------------------------------------
-
-    def _postpone_lock_screen(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self.lock_screen.postpone()
-        self._notify(icon, "已推迟 1 小时后自动锁屏")
-
-    def _open_keep_awake(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(
-            lambda: show_keep_awake_dialog(
-                self.root,
-                self.keep_awake,
-                on_changed=icon.update_menu,
-            )
-        )
-
-    # -- 快捷操作 ---------------------------------------------------
-
-    def _tray_menu_items(self):
-        tree = build_action_tree(load_quick_actions())
-        has_custom = False
-        for kind, value in tree.entries:
-            if kind == "menu":
-                if value in BUILTIN_TOP_MENUS:
-                    continue
-                has_custom = True
-                yield MenuItem(value, Menu(self._make_node_menu(tree.children[value])))
-            else:
-                has_custom = True
-                yield MenuItem(value.name, self._make_run_quick_action(value))
-        if has_custom:
-            yield Menu.SEPARATOR
-        yield MenuItem("手机操作", Menu(self._make_phone_menu(tree)))
-        system_node = tree.children.get(SYSTEM_COMMANDS_MENU)
-        if system_node and system_node.has_items:
-            yield MenuItem(SYSTEM_COMMANDS_MENU, Menu(self._make_node_menu(system_node)))
+    def show(self, page: str = "") -> None:
+        if page:
+            self.window.setProperty("page", page)
+        if self.window.isMinimized():
+            self.window.showNormal()
         else:
-            yield MenuItem(SYSTEM_COMMANDS_MENU, Menu(self._empty_menu))
-        yield MenuItem("快捷操作", Menu(self._make_quick_menu()))
-        yield MenuItem(SETTINGS_MENU, Menu(self._make_settings_menu()))
-        yield MenuItem("退出", self._quit)
+            self.window.show()
+        self.window.raise_()
+        self.window.requestActivate()
 
-    def _empty_menu(self):
-        yield MenuItem("（暂无操作）", None, enabled=False)
+    def activate(self, activation: Activation) -> None:
+        if activation.scope:
+            self.bridge.activate_shell(activation)
+        else:
+            self.show()
 
-    def _make_phone_menu(self, tree: MenuTree):
-        def generate():
-            yield MenuItem("镜像手机", self._mirror_phone)
-            yield MenuItem("安装MCP", self._install_mcp)
-            yield MenuItem("共享网络", self._start_network)
-            yield MenuItem("停止共享", self._stop_network)
-            extra = tree.children.get("手机操作")
-            if extra and extra.has_items:
-                yield Menu.SEPARATOR
-                yield from self._yield_node_items(extra)
+    def _activate(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.show()
 
-        return generate
+    def _rebuild_menu(self) -> None:
+        self.menu.clear()
+        self.menu.addAction("打开工作台", lambda: self.show())
+        self.menu.addSeparator()
+        phone = self.menu.addMenu("手机工具")
+        for label, operation in (("手机镜像", "mirror"), ("安装手机 MCP", "mcp"),
+                                 ("启动网络共享", "network"), ("停止网络共享", "stop-network")):
+            phone.addAction(label, lambda checked=False, value=operation: self._run_device(value))
+        self.menu.addAction("防睡眠", lambda: self.show("power"))
+        self.menu.addAction("推迟锁屏", self.bridge.postponeLock)
+        tree = self.bridge.tray_tree()
+        if tree.has_items:
+            self._add_nodes(self.menu.addMenu("快捷操作"), tree)
+        self.menu.addSeparator()
+        self.menu.addAction("退出豆荚工具", self.app.quit)
 
-    def _make_quick_menu(self):
-        def generate():
-            yield MenuItem("添加操作", self._add_quick_action)
-            yield MenuItem("编辑操作", self._reorder_quick_actions)
+    def _run_device(self, operation: str) -> None:
+        self.show("activity")
+        self.bridge.runDevice(operation)
 
-        return generate
-
-    def _make_settings_menu(self):
-        def generate():
-            yield MenuItem(
-                "开机启动",
-                self._toggle_autostart,
-                checked=lambda _item: is_autostart_enabled(),
-            )
-            yield Menu.SEPARATOR
-            yield MenuItem("导出配置", self._export_settings)
-            yield MenuItem("导入配置", self._import_settings)
-
-        return generate
-
-    def _make_node_menu(self, node: MenuTree):
-        def generate():
-            yield from self._yield_node_items(node)
-
-        return generate
-
-    def _yield_node_items(self, node: MenuTree):
+    def _add_nodes(self, menu: QMenu, node: MenuTree) -> None:
         for kind, value in node.entries:
             if kind == "menu":
-                yield MenuItem(value, Menu(self._make_node_menu(node.children[value])))
-            elif value.command == BUILTIN_COMMAND_KEEP_AWAKE:
-                yield MenuItem(
-                    value.name,
-                    self._make_run_quick_action(value),
-                    checked=lambda _item: self.keep_awake.is_active,
-                )
+                self._add_nodes(menu.addMenu(value), node.children[value])
             else:
-                yield MenuItem(value.name, self._make_run_quick_action(value))
-
-    def _add_quick_action(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(lambda: self._open_add_quick_action_dialog(icon))
-
-    def _open_add_quick_action_dialog(self, icon: pystray.Icon) -> None:
-        show_add_quick_action_dialog(self.root, icon.update_menu)
-
-    def _reorder_quick_actions(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(lambda: self._open_reorder_quick_actions_dialog(icon))
-
-    def _open_reorder_quick_actions_dialog(self, icon: pystray.Icon) -> None:
-        show_reorder_quick_actions_dialog(self.root, icon.update_menu)
-
-    def _make_run_quick_action(self, action: QuickAction):
-        def _run(icon: pystray.Icon, item: MenuItem) -> None:
-            if action.command == BUILTIN_COMMAND_POSTPONE_LOCK:
-                self._postpone_lock_screen(icon, item)
-                return
-            if action.command == BUILTIN_COMMAND_KEEP_AWAKE:
-                self._open_keep_awake(icon, item)
-                return
-            self._run_on_ui(lambda a=action: run_quick_action(a))
-
-        return _run
-
-    def _toggle_autostart(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        enable = not is_autostart_enabled()
-        try:
-            set_autostart_enabled(enable)
-        except OSError as exc:
-            self._run_on_ui(
-                lambda: messagebox.showerror(APP_TITLE, f"设置开机启动失败：\n{exc}")
-            )
-            return
-        self._notify(icon, "已开启开机启动" if enable else "已关闭开机启动")
-
-    def _export_settings(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(lambda: self._export_settings_on_ui(icon))
-
-    def _import_settings(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self._run_on_ui(lambda: self._import_settings_on_ui(icon))
-
-    def _pick_settings_file(self, *, save: bool) -> str:
-        self.root.attributes("-topmost", True)
-        try:
-            if save:
-                return filedialog.asksaveasfilename(
-                    parent=self.root,
-                    title="导出配置",
-                    defaultextension=".json",
-                    filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")],
-                    initialfile=f"豆荚工具-配置-{date.today().isoformat()}.json",
-                )
-            return filedialog.askopenfilename(
-                parent=self.root,
-                title="导入配置",
-                filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")],
-            )
-        finally:
-            self.root.attributes("-topmost", False)
-
-    def _export_settings_on_ui(self, icon: pystray.Icon) -> None:
-        filename = self._pick_settings_file(save=True)
-        if not filename:
-            return
-        payload = build_export_payload(dump_quick_actions_store())
-        try:
-            Path(filename).write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"导出配置失败：\n{exc}")
-            return
-        self._notify(icon, "配置已导出")
-
-    def _import_settings_on_ui(self, icon: pystray.Icon) -> None:
-        filename = self._pick_settings_file(save=False)
-        if not filename:
-            return
-        try:
-            data = json.loads(Path(filename).read_text(encoding="utf-8-sig"))
-            config_data, quick_actions_data = parse_import_payload(data)
-        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-            messagebox.showerror(APP_TITLE, f"导入配置失败：\n{exc}")
-            return
-        if config_data is None and quick_actions_data is None:
-            messagebox.showerror(APP_TITLE, "配置文件里没有可导入的内容。")
-            return
-        parts: list[str] = []
-        if config_data is not None:
-            parts.append("工具配置")
-        if quick_actions_data is not None:
-            parts.append("快捷操作")
-        if not messagebox.askyesno(
-            APP_TITLE,
-            f"导入将覆盖当前的{'、'.join(parts)}，确定继续？",
-        ):
-            return
-        try:
-            if config_data is not None:
-                self._apply_imported_config(replace_config(config_data))
-            if quick_actions_data is not None:
-                replace_quick_actions_store(quick_actions_data)
-        except (OSError, ValueError, TypeError) as exc:
-            messagebox.showerror(APP_TITLE, f"导入配置失败：\n{exc}")
-            return
-        icon.update_menu()
-        self._notify(icon, "配置已导入")
-
-    def _apply_imported_config(self, config: AppConfig) -> None:
-        self.mirror.config = config
-        self.forward.config = config
-        self.network.config = config
-
-    # -- 退出 -------------------------------------------------------
-
-    def _quit(self, icon: pystray.Icon, _item: MenuItem) -> None:
-        self.forward.stop()
-        self.network.stop()
-        self.mirror.stop()
-        self.lock_screen.cancel()
-        self.keep_awake.stop(run_end_action=False)
-        if IS_MACOS:
-            # icon.stop() stops the shared NSApplication.  With Tk owning that
-            # same Cocoa loop, stopping it before a queued root.destroy callback
-            # lets Tcl call into an already-finalizing Python interpreter.
-            icon.visible = False
-            self.root.quit()
-            self.root.destroy()
-            return
-        icon.stop()
-        self.root.after(0, self.root.destroy)
+                menu.addAction(value.name, lambda checked=False, key=value.id: self.bridge.runAction(key))
 
 
-def main() -> None:
-    DDToolTrayApp().run()
+def _socket_name() -> str:
+    key = hashlib.sha256(str(get_config_dir().resolve()).encode()).hexdigest()[:20]
+    return f"ddtool-{key}"
+
+
+def main() -> int:
+    arguments = sys.argv[1:]
+    try:
+        activation = Activation.parse(arguments)
+    except ValueError:
+        return 2
+    background = arguments == ["--background"]
+    app = QApplication([sys.argv[0]])
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_TITLE)
+    app.setWindowIcon(QIcon(str(bundled_icon_png())))
+    app.setQuitOnLastWindowClosed(False)
+    config_dir = get_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(config_dir / "workbench.lock"))
+    lock.setStaleLockTime(0)
+    server_name = _socket_name()
+    if not lock.tryLock():
+        return 0 if background or send_activation(server_name, activation) else 1
+
+    desktop = Desktop(app)
+    server = QLocalServer(app)
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+    QLocalServer.removeServer(server_name)
+
+    receive_activations(server, desktop.activate)
+    if not server.listen(server_name):
+        desktop.bridge.close()
+        raise RuntimeError(server.errorString())
+    if not background:
+        desktop.activate(activation)
+    if not desktop.window.isVisible() and not desktop.window.property("canHide"):
+        desktop.show()
+    try:
+        return app.exec()
+    finally:
+        server.close()
+        desktop.tray.hide()
+        QMetaObject.invokeMethod(desktop.window, "persist")
+        _dispose_window(desktop.engine, desktop.window)
+        desktop.bridge.close()
+        lock.unlock()
+
+
+def _dispose_window(engine: QQmlApplicationEngine, window: QQuickWindow) -> None:
+    window.hide()
+    engine.deleteLater()
+    QCoreApplication.sendPostedEvents(engine, QEvent.Type.DeferredDelete)
+
+
+def ui_smoke_test() -> int:
+    from unittest.mock import patch
+
+    from PySide6.QtTest import QTest
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
+    app = QApplication(sys.argv)
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        patch("ddtool.config.get_config_dir", return_value=Path(directory)),
+        patch("ddtool.quick_actions.get_config_dir", return_value=Path(directory)),
+        patch("ddtool.workbench.get_config_dir", return_value=Path(directory)),
+    ):
+        bridge = Workbench()
+        warnings: list[str] = []
+        engine, window = build_window(bridge, warnings)
+        window.show()
+        test_action = bridge.saveAction("", "冒烟/测试操作", "echo DDTool", "zsh" if bridge.mac else "cmd", "auto", False)
+        if not test_action:
+            warnings.append("Could not add the smoke-test action.")
+        for page in ("actions", "devices", "power", "activity", "settings", "context"):
+            window.setProperty("page", page)
+            app.processEvents()
+        save_button = window.findChild(QObject, "saveShellShortcuts")
+        with patch("ddtool.workbench.apply_integration") as register:
+            if save_button is not None:
+                QMetaObject.invokeMethod(save_button, "click")
+            if not register.called:
+                warnings.append("The shortcut form did not submit valid settings.")
+            bridge.saveShellConfig(ShortcutConfig(True).values())
+            bridge.activate_shell(Activation("finder" if bridge.mac else "directory", directory))
+            app.processEvents()
+            if bridge.shellDirectory != directory:
+                warnings.append("The shortcut did not receive the folder context.")
+        window.setProperty("page", "actions")
+        app.processEvents()
+        QMetaObject.invokeMethod(window, "openPalette")
+        app.processEvents()
+        palette = window.findChild(QObject, "commandPalette")
+        if palette is None or not palette.property("visible"):
+            warnings.append("The command palette did not open.")
+        QTest.keyClick(window, Qt.Key.Key_Escape)
+        bridge.deleteAction(test_action)
+        bridge.setAppearance("light", "blue", True)
+        app.processEvents()
+        bridge.setAppearance("dark", "mint", False)
+        snapshot = os.environ.get("DDTOOL_UI_SNAPSHOT")
+        if snapshot:
+            window.resize(1120, 740)
+            app.processEvents()
+            window.grabWindow().save(snapshot)
+        _dispose_window(engine, window)
+        bridge.close()
+        marker = os.environ.get("DDTOOL_UI_SMOKE_RESULT")
+        if marker:
+            Path(marker).write_text("\n".join(warnings) if warnings else "OK", encoding="utf-8")
+        if warnings and sys.stderr is not None:
+            print("\n".join(warnings), file=sys.stderr)
+        return int(bool(warnings) or not bridge.actionItems)
