@@ -1,16 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import re
 
 
-app_version = os.environ.get('DDTOOL_VERSION', '0.0.0').lstrip('v')
+version = re.match(r'^v?(\d+\.\d+\.\d+)(?:$|[-+])', os.environ.get('DDTOOL_VERSION', ''))
+app_version = version.group(1) if version else '0.0.0'
 
 
 a = Analysis(
     ['src/ddtool/__main__.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('assets/tray_icon.png', 'assets')],
+    datas=[('assets/tray_icon.png', 'assets'), ('src/ddtool/qml', 'ddtool/qml'), ('LICENSE', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

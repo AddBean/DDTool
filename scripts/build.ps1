@@ -90,17 +90,5 @@ Invoke-Checked {
         ".\DDTool.spec"
 }
 
-Invoke-Checked {
-    & ".\.venv\Scripts\python.exe" -c @"
-from pathlib import Path
-dist = Path('dist')
-src = dist / 'DDTool.exe'
-dst = dist / '\u8c46\u835a\u5de5\u5177.exe'
-if src.exists():
-    dst.write_bytes(src.read_bytes())
-    src.unlink()
-for path in dist.glob('*.exe'):
-    if path.name != dst.name:
-        path.unlink()
-"@
-}
+Compress-Archive -LiteralPath "dist\DDTool" -DestinationPath "dist\DDTool-Windows-x64.zip" -Force
+Write-Host "Built dist\DDTool-Windows-x64.zip"

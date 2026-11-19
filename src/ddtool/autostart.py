@@ -19,9 +19,9 @@ _LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.ddtool.app.plist
 
 def launch_arguments() -> list[str]:
     if getattr(sys, "frozen", False):
-        return [str(Path(sys.executable).resolve())]
+        return [str(Path(sys.executable).resolve()), "--background"]
 
-    python = Path(sys.executable).resolve()
+    python = Path(sys.executable).absolute()
     pythonw = python.with_name("pythonw.exe" if IS_WINDOWS else "pythonw")
     exe = pythonw if pythonw.exists() else python
     src = Path(__file__).resolve().parents[1]
@@ -31,10 +31,10 @@ def launch_arguments() -> list[str]:
         "import sys\n"
         f"sys.path.insert(0, {json.dumps(str(src))})\n"
         "from ddtool.tray_app import main\n"
-        "main()\n",
+        "raise SystemExit(main())\n",
         encoding="utf-8",
     )
-    return [str(exe), str(entry)]
+    return [str(exe), str(entry), "--background"]
 
 
 def launch_command() -> str:

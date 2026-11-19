@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from tkinter import messagebox
 
-from ddtool.config import APP_TITLE, AppConfig, get_config_path
+from ddtool.config import AppConfig, get_config_path
 from ddtool.dns_proxy import DnsProxy
+from ddtool.notices import Reporter
 from ddtool.platform import IS_WINDOWS, subprocess_creation_flags
 from ddtool.resources import find_executable
 
@@ -18,14 +18,14 @@ GNIRETET_DEFAULT_DIR = Path.home() / "gnirehtet" / "gnirehtet-rust-win64"
 @dataclass(slots=True)
 class NetworkController:
     config: AppConfig
+    reporter: Reporter = field(default_factory=Reporter, kw_only=True)
     process: subprocess.Popen[bytes] | None = None
     dns_proxy: DnsProxy | None = None
 
     def start(self) -> None:
         gnirehtet = _resolve_gnirehtet_path(self.config)
         if not gnirehtet:
-            messagebox.showerror(
-                APP_TITLE,
+            self.reporter.error(
                 "没有找到 gnirehtet。\n\n"
                 f"请编辑配置文件：\n{get_config_path()}",
             )
@@ -34,7 +34,7 @@ class NetworkController:
         adb = _find_adb()
         device_error = _check_adb_device(adb)
         if device_error:
-            messagebox.showerror(APP_TITLE, device_error)
+            self.reporter.error(device_error)
             return
 
         already_running = (self.process and self.process.poll() is None) or _gnirehtet_running()
@@ -54,22 +54,20 @@ class NetworkController:
             )
         except FileNotFoundError:
             self._stop_dns_proxy()
-            messagebox.showerror(
-                APP_TITLE,
+            self.reporter.error(
                 "没有找到 gnirehtet。\n\n"
                 f"请编辑配置文件：\n{get_config_path()}",
             )
             return
         except OSError as exc:
             self._stop_dns_proxy()
-            messagebox.showerror(APP_TITLE, f"启动 gnirehtet 失败：\n{exc}")
+            self.reporter.error(f"启动 gnirehtet 失败：\n{exc}")
             return
 
         try:
             self.process.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
-            messagebox.showinfo(
-                APP_TITLE,
+            self.reporter.info(
                 "已启动网络共享。\n\n"
                 "请在手机上允许 VPN 连接，稍等几秒即可上网。",
             )
@@ -77,8 +75,7 @@ class NetworkController:
 
         self.process = None
         self._stop_dns_proxy()
-        messagebox.showerror(
-            APP_TITLE,
+        self.reporter.error(
             "网络共享启动失败，请确认：\n"
             "1. 手机已连接并开启 USB 调试\n"
             "2. 手机上已允许该电脑调试\n"
