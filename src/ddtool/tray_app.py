@@ -175,6 +175,7 @@ def ui_smoke_test() -> int:
         bridge = Workbench()
         warnings: list[str] = []
         engine, window = build_window(bridge, warnings)
+        window.resize(1000, 620)
         window.show()
         test_action = bridge.saveAction("", "冒烟/测试操作", "echo DDTool", "zsh" if bridge.mac else "cmd", "auto", False)
         if not test_action:
@@ -257,14 +258,17 @@ def ui_smoke_test() -> int:
             else:
                 QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=source)
                 QTest.mouseMove(window, edge, 30)
-                QTest.qWait(800)
-                scroll_distance = tree_list.property("contentY") - original_y
-                target_key = tree_list.property("targetKey")
+                for _ in range(60):
+                    QTest.qWait(50)
+                    scroll_distance = tree_list.property("contentY") - original_y
+                    target_key = tree_list.property("targetKey")
+                    if scroll_distance > 320 and target_key in scroll_groups:
+                        break
                 placement = tree_list.property("placement")
                 QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=edge)
                 app.processEvents()
                 if scroll_distance <= 320 or target_key not in scroll_groups:
-                    warnings.append("Dragging near the bottom did not scroll to a distant drop target.")
+                    warnings.append(f"Dragging near the bottom did not reach a distant drop target (scrolled {scroll_distance:.0f}px, target {target_key!r}).")
                 else:
                     order = [item["treeKey"] for item in bridge.actionTree]
                     offset = -1 if placement == "before" else 1
