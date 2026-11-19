@@ -37,11 +37,13 @@ class ShortcutConfig:
     label: str = DEFAULT_LABEL
     mode: str = "chooser"
     targets: tuple[str, ...] = ("actions", "devices", "power", "folder")
+    direct_run: bool = False
 
     @classmethod
     def parse(cls, data: dict) -> ShortcutConfig:
         enabled, label, mode, targets = (data.get(key) for key in ("enabled", "label", "mode", "targets"))
-        if type(enabled) is not bool or not isinstance(label, str) or not isinstance(mode, str):
+        direct_run = data.get("direct_run", False)
+        if type(enabled) is not bool or type(direct_run) is not bool or not isinstance(label, str) or not isinstance(mode, str):
             raise ValueError("右键入口设置格式无效。")
         label = label.strip()
         if not 1 <= len(label) <= 36 or not label.isprintable() or "&" in label:
@@ -53,7 +55,7 @@ class ShortcutConfig:
             raise ValueError("快捷列表包含无效或重复的功能。")
         if enabled and mode in {"chooser", "pinned"} and not targets:
             raise ValueError("请为快捷列表至少选择一个功能。")
-        return cls(enabled, label, mode, tuple(targets))
+        return cls(enabled, label, mode, tuple(targets), direct_run and mode == "pinned")
 
     def values(self) -> dict:
         return {**asdict(self), "targets": list(self.targets)}

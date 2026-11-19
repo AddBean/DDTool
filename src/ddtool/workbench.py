@@ -5,6 +5,7 @@ import logging
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import Event
@@ -269,6 +270,14 @@ class Workbench(QObject):
             if error:
                 self._record("error", f"操作已保存，但右键菜单同步失败：{error}")
 
+    def _disarm_direct_run(self) -> None:
+        if self._shell.direct_run:
+            config = replace(self._shell, direct_run=False)
+            config.save(self._shell_path)
+            self._shell = config
+            self.shellConfigChanged.emit()
+            self._record("info", "命令配置已变更；请重新确认后开启右键点击即执行。")
+
     def activate_shell(self, activation: Activation) -> None:
         if not self._shell.enabled:
             self.navigate.emit("context")
@@ -287,7 +296,7 @@ class Workbench(QObject):
         if self._shell.mode == "pinned" and activation.entry:
             target = next((key for key in self._shell.targets if entry_token(key) == activation.entry), None)
             if target is not None:
-                self._open_shell_target(target)
+                self._open_shell_target(target, direct_run=self._shell.direct_run and not IS_MACOS)
             else:
                 self.navigate.emit("context")
         elif activation.entry or self._shell.mode in {"chooser", "pinned"}:
@@ -300,7 +309,7 @@ class Workbench(QObject):
         if self._shell.enabled and self._shell_source and target in self._shell.targets:
             self._open_shell_target(target)
 
-    def _open_shell_target(self, target: str) -> None:
+    def _open_shell_target(self, target: str, *, direct_run: bool = False) -> None:
         if target == "folder":
             folder = self._shell_directory
             if folder is None or not folder.is_dir() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
@@ -311,10 +320,14 @@ class Workbench(QObject):
         elif target.startswith("action:"):
             action = next((entry for entry in self._actions if entry.id == target[7:]), None)
             folder = self._shell_directory
-            self.navigate.emit("context")
             if action is None or folder is None or not folder.is_dir():
+                self.navigate.emit("context")
                 self._record("error", "操作已不存在，或右键目录已不可用。")
                 return
+            if direct_run:
+                self._run_action(action, folder)
+                return
+            self.navigate.emit("context")
             self._pending_shell_run = action, folder
             self.shellRunRequested.emit(action.name, str(folder))
 
@@ -503,6 +516,10 @@ class Workbench(QObject):
                 raise ValueError("该命令前缀由应用保留。")
             if key and not self._editable(key):
                 raise ValueError("只能修改已存在的自定义操作。")
+            if self._shell.direct_run and f"action:{key}" in self._shell.targets:
+                previous = next(action for action in self._actions if action.id == key)
+                if (previous.command, previous.shell, previous.terminal, previous.keep_terminal) != (command.strip(), shell, terminal, keep):
+                    self._disarm_direct_run()
             args = (location, command, keep, shell, terminal)
             saved = actions.update_quick_action(key, *args) if key else actions.add_quick_action(*args)
             if saved is None:
@@ -624,6 +641,7 @@ class Workbench(QObject):
                 raise ValueError("配置文件没有可导入的内容。")
             config = AppConfig.from_dict(config_data) if config_data is not None else None
             if action_data is not None:
+                self._disarm_direct_run()
                 actions.replace_quick_actions_store(action_data)
             if config is not None:
                 save_config(config)

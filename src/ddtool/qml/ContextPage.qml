@@ -20,6 +20,7 @@ Basic.ScrollView {
         enabledToggle.checked = config.enabled
         menuLabel.text = config.label
         behavior.currentIndex = Math.max(0, modes.findIndex(item => item.key === config.mode))
+        directRun.checked = config.direct_run
         selected = config.targets.filter(key => workbench.shellTargets.some(item => item.key === key))
     }
 
@@ -129,6 +130,12 @@ Basic.ScrollView {
                     model: page.modes
                 }
                 Text { visible: page.selectsPins; text: "固定项 · 勾选要展示的功能"; color: Theme.ink; font.pixelSize: 13 }
+                Toggle {
+                    id: directRun
+                    visible: behavior.currentValue === "pinned"
+                    text: "点击固定操作即执行，不弹出确认"
+                    Accessible.description: "仅对信任的命令启用。命令会在右键所选目录运行。"
+                }
                 GridLayout {
                     visible: page.selectsPins
                     Layout.fillWidth: true
@@ -163,7 +170,8 @@ Basic.ScrollView {
                         text: "保存并应用"
                         onClicked: {
                             const error = workbench.saveShellConfig({"enabled": enabledToggle.checked, "label": menuLabel.text,
-                                                                  "mode": behavior.currentValue, "targets": page.selected})
+                                                                  "mode": behavior.currentValue, "targets": page.selected,
+                                                                  "direct_run": behavior.currentValue === "pinned" && directRun.checked})
                             page.failed = error !== ""
                             page.feedback = error || (enabledToggle.checked ? "系统入口已更新。" : "设置已保存，系统入口未启用。")
                             if (!error) page.reset()

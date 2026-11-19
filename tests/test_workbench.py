@@ -144,3 +144,28 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(execute.call_args.args[1], self.directory)
             self.bridge.deleteAction(action)
             self.assertFalse(self.bridge.shellConfig["enabled"])
+
+    def test_pinned_direct_run_uses_folder_without_opening_workbench(self) -> None:
+        action = self.bridge.saveAction("", "编译", "echo build", "zsh", "auto", False)
+        target = f"action:{action}"
+        request = Activation("directory", str(self.directory), entry_token(target))
+        config = ShortcutConfig(True, mode="pinned", targets=(target,), direct_run=True)
+        destinations, requests = [], []
+        self.bridge.navigate.connect(destinations.append)
+        self.bridge.shellRunRequested.connect(lambda *args: requests.append(args))
+        with patch("ddtool.workbench.IS_MACOS", False), patch("ddtool.workbench.apply_integration"), \
+                patch.object(self.bridge, "_run_action") as execute:
+            self.assertEqual(self.bridge.saveShellConfig(config.values()), "")
+            self.assertTrue(ShortcutConfig.load(self.directory / "shell-shortcuts.json").direct_run)
+            self.bridge.activate_shell(request)
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[1], self.directory)
+            self.assertEqual((destinations, requests), ([], []))
+            self.bridge.activate_shell(Activation("directory", str(self.directory), entry_token("power")))
+            self.bridge.activate_shell(Activation("directory", str(self.directory / "missing"), entry_token(target)))
+            self.assertEqual(execute.call_count, 1)
+            self.assertEqual(self.bridge.saveAction(action, "编译", "echo changed", "zsh", "auto", False), action)
+            self.assertFalse(self.bridge.shellConfig["direct_run"])
+            self.bridge.activate_shell(request)
+            self.assertEqual(execute.call_count, 1)
+            self.assertEqual(requests, [("编译", str(self.directory))])
