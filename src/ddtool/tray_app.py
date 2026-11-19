@@ -56,7 +56,7 @@ class Desktop:
     def show(self, page: str = "") -> None:
         if page:
             self.window.setProperty("page", page)
-        if self.window.isMinimized():
+        if self.window.windowState() == Qt.WindowState.WindowMinimized:
             self.window.showNormal()
         else:
             self.window.show()
@@ -123,7 +123,7 @@ def main() -> int:
     lock = QLockFile(str(config_dir / "workbench.lock"))
     lock.setStaleLockTime(0)
     server_name = _socket_name()
-    if not lock.tryLock():
+    if not lock.tryLock(0):
         return 0 if background or send_activation(server_name, activation) else 1
 
     desktop = Desktop(app)
