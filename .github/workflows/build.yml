@@ -51,12 +51,14 @@ jobs:
           if (!(Test-Path $env:DDTOOL_UI_SMOKE_RESULT)) { throw 'No packaged UI smoke result' }
           $result = Get-Content -Raw $env:DDTOOL_UI_SMOKE_RESULT
           if ($exe.ExitCode -ne 0 -or $result.Trim() -ne 'OK') { throw "Packaged UI smoke failed: $result" }
+          python scripts/check-package-launch.py 'dist\DDTool\DDTool.exe'
       - name: Smoke-test the macOS package
         if: runner.os == 'macOS'
         run: |
           export DDTOOL_UI_SMOKE_RESULT="$RUNNER_TEMP/ddtool-ui-smoke.txt"
           'dist/豆荚工具.app/Contents/MacOS/DDTool' --ui-smoke-test
           test "$(cat "$DDTOOL_UI_SMOKE_RESULT")" = 'OK'
+          python scripts/check-package-launch.py 'dist/豆荚工具.app/Contents/MacOS/DDTool'
       - name: Prepare macOS release asset
         if: runner.os == 'macOS'
         run: cp 'dist/豆荚工具.dmg' 'dist/DDTool-macOS-arm64.dmg'
