@@ -13,6 +13,7 @@ if IS_WINDOWS:
     import winreg
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_APPROVAL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 _VALUE_NAME = APP_TITLE
 _LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.ddtool.app.plist"
 
@@ -52,6 +53,45 @@ def is_enabled() -> bool:
     except OSError:
         return False
     return bool(str(value).strip())
+
+
+def status() -> str:
+    if not is_enabled():
+        return "未启用"
+    try:
+        if IS_MACOS:
+            settings = plistlib.loads(_LAUNCH_AGENT.read_bytes())
+            paths = settings.get("ProgramArguments", [])[:-1]
+            if settings.get("Label") != "com.ddtool.app" or not paths or not all(Path(path).is_file() for path in paths):
+                return "启动路径已失效，请关闭后重新启用"
+            return "已登记 · 系统可能限制后台运行，请在系统设置确认"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            command = winreg.QueryValueEx(key, _VALUE_NAME)[0]
+        executable = command.split('"', 2)[1] if command.startswith('"') else command.partition(' ')[0]
+        if not executable or not Path(executable).is_file():
+            return "启动路径已失效，请关闭后重新启用"
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _APPROVAL_KEY) as key:
+                approval = winreg.QueryValueEx(key, _VALUE_NAME)[0]
+        except FileNotFoundError:
+            return "已登记"
+        if isinstance(approval, bytes) and approval[:1] in {b"\x03", b"\x07"}:
+            return "系统已禁用 · 请在系统设置的启动应用中启用"
+        return "已登记"
+    except (OSError, ValueError, TypeError, AttributeError, IndexError, plistlib.InvalidFileException):
+        return "已登记 · 无法确认系统状态"
+
+
+def remove_install_registration(executable: Path) -> None:
+    if not IS_WINDOWS:
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+            command = winreg.QueryValueEx(key, _VALUE_NAME)[0]
+            if command == subprocess.list2cmdline([str(executable), "--background"]):
+                winreg.DeleteValue(key, _VALUE_NAME)
+    except FileNotFoundError:
+        pass
 
 
 def set_enabled(enabled: bool) -> None:

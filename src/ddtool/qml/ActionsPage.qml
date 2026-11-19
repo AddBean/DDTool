@@ -6,13 +6,23 @@ ColumnLayout {
     id: view
     property string selectedKey: ""
     property bool creating: false
+    property string selectedGroup: "u:"
+    property var folded: ({})
     property bool showDetails: workbench.layoutValue("detailsHidden") === 0
     property var items: workbench.actionItems
     readonly property var selected: items.find(item => item.key === selectedKey) || null
     readonly property bool readOnly: selected !== null && selected.preset
-    readonly property var filtered: items.filter(item => {
+    readonly property var filtered: workbench.actionTree.filter(item => {
         const query = search.text.trim().toLocaleLowerCase()
-        return (item.name + " " + item.group + " " + item.shell).toLocaleLowerCase().includes(query)
+        if (query) return (item.name + " " + item.group + " " + (item.shell || "")).toLocaleLowerCase().includes(query)
+        let parent = item.parentKey
+        const tree = workbench.actionTree
+        while (parent) {
+            if (folded[parent]) return false
+            const node = tree.find(entry => entry.treeKey === parent)
+            parent = node ? node.parentKey : ""
+        }
+        return true
     })
     spacing: 15
 
@@ -29,11 +39,43 @@ ColumnLayout {
         selectedKey = key
         setFields()
     }
+    function chooseRow(item) {
+        if (item.groupRow) {
+            selectedGroup = item.treeKey
+            const state = Object.assign({}, folded)
+            state[item.treeKey] = !state[item.treeKey]
+            folded = state
+        } else {
+            selectedGroup = item.parentKey
+            select(item.key)
+        }
+    }
+    function groupEditor(operation, key, name) {
+        groupDialog.operation = operation
+        groupDialog.groupKey = key
+        groupName.text = name
+        groupDialog.open()
+        groupName.forceActiveFocus()
+    }
+    function moveItem(sourceKey, targetKey, placement) {
+        if (workbench.moveTree(sourceKey, targetKey, placement) && selected) setFields()
+    }
+    function rowMenu(item, row) {
+        if (item.groupRow) {
+            if (item.preset) return
+            groupMenu.itemData = item
+            groupMenu.popup(row, row.width / 2, row.height)
+        } else {
+            select(item.key)
+            actionMenu.popup(row, row.width / 2, row.height)
+        }
+    }
     function createAction() {
         creating = true
         showDetails = true
         selectedKey = ""
         setFields()
+        if (selectedGroup.startsWith("g:")) location.text = selectedGroup.substring(2) + "/"
         location.forceActiveFocus()
     }
     function persist() {
@@ -54,9 +96,10 @@ ColumnLayout {
         Section {
             Layout.fillWidth: true
             title: "快捷操作"
-            description: "整理本地命令和系统动作，工作台与托盘共享同一份配置。"
+            description: "拖住 ⋮⋮ 调整位置；放到分组中间可移入分组。"
         }
         WorkButton { text: view.showDetails ? "隐藏详情" : "显示详情"; onClicked: view.showDetails = !view.showDetails }
+        WorkButton { text: "+ 分组"; onClicked: view.groupEditor("create", "", "") }
         WorkButton { text: "+ 新建操作"; primary: true; onClicked: view.createAction() }
     }
 
@@ -98,11 +141,12 @@ ColumnLayout {
                         text: modelData.name
                         hoverEnabled: true
                         activeFocusOnTab: true
-                        onClicked: view.select(modelData.key)
+                        leftPadding: 8 + Math.min(modelData.depth, 7) * 13
+                        onClicked: view.chooseRow(modelData)
                         background: Rectangle {
                             radius: 6
-                            color: view.selectedKey === row.modelData.key ? Theme.accentWash : row.hovered ? Theme.hover : "transparent"
-                            border.color: row.visualFocus ? Theme.accent : "transparent"
+                            color: row.modelData.groupRow ? Theme.inset : view.selectedKey === row.modelData.key ? Theme.accentWash : row.hovered ? Theme.hover : "transparent"
+                            border.color: row.visualFocus || dropZone.containsDrag ? Theme.accent : "transparent"
                         }
                         contentItem: RowLayout {
                             spacing: 9
@@ -111,36 +155,73 @@ ColumnLayout {
                                 Layout.preferredHeight: 27
                                 radius: 6
                                 color: Theme.inset
-                                Text { anchors.centerIn: parent; text: row.modelData.builtin ? "◆" : "›_"; color: Theme.accent; font.family: Theme.mono; font.pixelSize: 12 }
+                                Text { anchors.centerIn: parent; text: row.modelData.groupRow ? (view.folded[row.modelData.treeKey] ? "›" : "⌄") : row.modelData.builtin ? "◆" : "›_"; color: Theme.accent; font.family: Theme.mono; font.pixelSize: 12 }
                             }
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: 0
-                                Text { Layout.fillWidth: true; text: row.modelData.name; textFormat: Text.PlainText; color: Theme.ink; elide: Text.ElideRight; font.pixelSize: 13 }
-                                Text { Layout.fillWidth: true; text: row.modelData.group; textFormat: Text.PlainText; color: Theme.muted; elide: Text.ElideRight; font.pixelSize: 11; visible: !Theme.compact }
+                                Text { Layout.fillWidth: true; text: row.modelData.name; textFormat: Text.PlainText; color: Theme.ink; elide: Text.ElideRight; font.pixelSize: 13; font.weight: row.modelData.groupRow ? Font.DemiBold : Font.Normal }
+                                Text { Layout.fillWidth: true; text: row.modelData.group; textFormat: Text.PlainText; color: Theme.muted; elide: Text.ElideRight; font.pixelSize: 11; visible: !row.modelData.groupRow && !Theme.compact }
                             }
-                            Text { text: row.modelData.preset ? "内置" : row.modelData.shell.toUpperCase(); color: Theme.muted; font.pixelSize: 11 }
+                            WorkButton {
+                                visible: !row.modelData.groupRow
+                                quiet: true
+                                text: workbench.shellConfig.targets.includes("action:" + row.modelData.key) ? "取消固定" : "固定到右键"
+                                onClicked: view.pin(row.modelData.key)
+                            }
+                            Item {
+                                Layout.preferredWidth: 22
+                                Layout.fillHeight: true
+                                visible: !row.modelData.preset && row.modelData.treeKey !== "u:" && !search.text.trim()
+                                Text { text: "⋮⋮"; color: Theme.muted; anchors.centerIn: parent }
+                                MouseArea {
+                                    objectName: "treeDrag:" + row.modelData.treeKey
+                                    anchors.fill: parent
+                                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                    drag.target: dragToken
+                                    drag.smoothed: false
+                                    onPressed: mouse => { dragToken.x = mouse.x; dragToken.y = mouse.y }
+                                    onReleased: if (drag.active) dragToken.Drag.drop()
+                                    Item {
+                                        id: dragToken
+                                        width: 1; height: 1
+                                        Drag.active: parent.drag.active
+                                        Drag.source: row
+                                        Drag.keys: ["ddtool-tree"]
+                                    }
+                                }
+                            }
+                        }
+                        DropArea {
+                            id: dropZone
+                            objectName: "treeDrop:" + row.modelData.treeKey
+                            anchors.fill: parent
+                            enabled: !row.modelData.preset && !search.text.trim()
+                            keys: ["ddtool-tree"]
+                            onDropped: drop => {
+                                if (!drop.source || drop.source === row) return
+                                const placement = row.modelData.treeKey === "u:" ? "inside"
+                                    : drop.y < height * 0.30 ? "before"
+                                    : drop.y > height * 0.70 || !row.modelData.groupRow ? "after" : "inside"
+                                const sourceKey = drop.source.modelData.treeKey
+                                const targetKey = row.modelData.treeKey
+                                drop.acceptProposedAction()
+                                Qt.callLater(view.moveItem, sourceKey, targetKey, placement)
+                            }
                         }
                         TapHandler {
                             acceptedButtons: Qt.RightButton
-                            onTapped: {
-                                view.select(row.modelData.key)
-                                actionMenu.popup()
-                            }
+                            onTapped: view.rowMenu(row.modelData, row)
                         }
                         TapHandler {
                             enabled: workbench.mac
                             acceptedButtons: Qt.LeftButton
                             acceptedModifiers: Qt.MetaModifier
-                            onTapped: {
-                                view.select(row.modelData.key)
-                                actionMenu.popup()
-                            }
+                            onTapped: view.rowMenu(row.modelData, row)
                         }
                         Keys.onPressed: event => {
                             if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && event.modifiers & Qt.ShiftModifier)) {
-                                view.select(row.modelData.key)
-                                actionMenu.popup(row, row.width / 2, row.height)
+                                view.rowMenu(row.modelData, row)
                                 event.accepted = true
                             }
                         }
@@ -282,6 +363,50 @@ ColumnLayout {
         danger: true
         confirmText: "删除"
         onAccepted: workbench.deleteAction(actionKey)
+    }
+    function pin(key) {
+        const error = workbench.toggleShellPin(key)
+        if (error) { notice.message = error; notice.open() }
+    }
+    Prompt { id: notice; title: "无法固定"; confirmText: "知道了" }
+    Basic.Dialog {
+        id: groupDialog
+        property string operation
+        property string groupKey
+        anchors.centerIn: Basic.Overlay.overlay
+        modal: true
+        width: 340
+        background: Rectangle { color: Theme.panel; border.color: Theme.line; radius: 10 }
+        contentItem: ColumnLayout {
+            Text { text: groupDialog.operation === "rename" ? "重命名分组" : "新建分组"; color: Theme.ink; font.pixelSize: 18 }
+            Field { id: groupName; Layout.fillWidth: true; placeholderText: "分组名称"; onAccepted: saveGroup.clicked() }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                WorkButton { text: "取消"; onClicked: groupDialog.close() }
+                WorkButton {
+                    id: saveGroup
+                    text: "保存"
+                    primary: true
+                    onClicked: {
+                        const result = workbench.editGroup(groupDialog.groupKey, groupName.text, groupDialog.operation)
+                        if (result) { view.selectedGroup = result; groupDialog.close(); if (view.selected) view.setFields() }
+                    }
+                }
+            }
+        }
+    }
+    Basic.Menu {
+        id: groupMenu
+        property var itemData: null
+        background: Rectangle { color: Theme.panel; border.color: Theme.line; radius: 8 }
+        delegate: Basic.MenuItem {
+            id: groupMenuItem
+            contentItem: Text { text: groupMenuItem.text; color: Theme.ink; verticalAlignment: Text.AlignVCenter; opacity: groupMenuItem.enabled ? 1 : 0.38 }
+            background: Rectangle { color: groupMenuItem.highlighted ? Theme.hover : "transparent"; radius: 4 }
+        }
+        Basic.Action { text: "新建子分组"; onTriggered: view.groupEditor("create", groupMenu.itemData.treeKey === "u:" ? "" : groupMenu.itemData.treeKey, "") }
+        Basic.Action { text: "重命名"; enabled: groupMenu.itemData && groupMenu.itemData.treeKey !== "u:"; onTriggered: view.groupEditor("rename", groupMenu.itemData.treeKey, groupMenu.itemData.name) }
+        Basic.Action { text: "删除空分组"; enabled: groupMenu.itemData && groupMenu.itemData.treeKey !== "u:"; onTriggered: workbench.editGroup(groupMenu.itemData.treeKey, "", "remove") }
     }
     Basic.Menu {
         id: actionMenu

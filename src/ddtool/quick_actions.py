@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import locale
 import os
+import shlex
 import subprocess
 import tempfile
 import uuid
@@ -568,7 +569,7 @@ def _popen_detached(args: list[str], *, cwd: str, creationflags: int) -> None:
         subprocess.Popen(args, creationflags=fallback, **kwargs)
 
 
-def run_quick_action(action: QuickAction, reporter: Reporter | None = None) -> None:
+def run_quick_action(action: QuickAction, reporter: Reporter | None = None, *, working_directory: Path | None = None) -> None:
     reporter = reporter or Reporter()
     if action.command.startswith("ddtool:"):
         reporter.error(f"无法执行内置快捷操作：\n{action.command}")
@@ -576,7 +577,7 @@ def run_quick_action(action: QuickAction, reporter: Reporter | None = None) -> N
     shell = _normalize_shell(action.shell)
     command = _normalize_command(action.command)
     if IS_MACOS:
-        _run_macos_quick_action(command, action.keep_terminal, action.terminal, reporter)
+        _run_macos_quick_action(command, action.keep_terminal, action.terminal, reporter, working_directory)
         return
     use_script = "\n" in command or shell == SHELL_POWERSHELL
     if use_script:
@@ -585,7 +586,7 @@ def run_quick_action(action: QuickAction, reporter: Reporter | None = None) -> N
         except OSError as exc:
             reporter.error(f"写入临时脚本失败：\n{exc}")
             return
-    cwd = os.path.expanduser("~")
+    cwd = str(working_directory or Path.home())
     # 从 Cursor 等宿主进程里启动时，直接 CreateProcess(cmd) 会被校验拦截。
     # 用 start 拉开进程树，并允许脱离父 Job。
     flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
@@ -659,9 +660,12 @@ def _run_macos_quick_action(
     keep_terminal: bool,
     terminal: str,
     reporter: Reporter,
+    working_directory: Path | None = None,
 ) -> None:
     try:
         if keep_terminal:
+            if working_directory is not None:
+                command = f"cd -- {shlex.quote(str(working_directory))} || exit 1\n{command}"
             script = _write_command_script(command, SHELL_ZSH)
             subprocess.Popen(
                 macos_terminal_launch_args(script, terminal),
@@ -674,7 +678,7 @@ def _run_macos_quick_action(
             return
         subprocess.Popen(
             ["/bin/zsh", "-lc", command],
-            cwd=str(Path.home()),
+            cwd=str(working_directory or Path.home()),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

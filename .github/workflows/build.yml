@@ -20,10 +20,10 @@ jobs:
         include:
           - os: windows-latest
             artifact: DDTool-windows
-            asset: dist/DDTool-Windows-x64.zip
+            asset: dist/DDTool-Windows-x64*
           - os: macos-15
             artifact: DDTool-macos-arm64
-            asset: dist/DDTool-macOS-arm64.dmg
+            asset: dist/DDTool-macOS-arm64.*
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -35,6 +35,12 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q src tests
       - run: python -m ddtool --ui-smoke-test
+      - name: Stamp packaged version
+        shell: bash
+        run: |
+          version=0.0.0
+          if [[ "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then version="${BASH_REMATCH[1]}"; fi
+          echo "DDTOOL_VERSION=$version" >> "$GITHUB_ENV"
       - name: Build Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -52,6 +58,21 @@ jobs:
           $result = Get-Content -Raw $env:DDTOOL_UI_SMOKE_RESULT
           if ($exe.ExitCode -ne 0 -or $result.Trim() -ne 'OK') { throw "Packaged UI smoke failed: $result" }
           python scripts/check-package-launch.py 'dist\DDTool\DDTool.exe'
+      - name: Build and test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (!$compiler) { $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe' }
+          & $compiler "/DAppVersion=$env:DDTOOL_VERSION" 'scripts\DDTool.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+          $target = Join-Path $env:RUNNER_TEMP 'DDTool installed 测试'
+          $setup = Start-Process -FilePath 'dist\DDTool-Windows-x64-Setup.exe' -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$target`"" -PassThru -Wait
+          if ($setup.ExitCode -ne 0) { throw "Setup failed: $($setup.ExitCode)" }
+          python scripts/check-package-launch.py (Join-Path $target 'DDTool.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed application failed to launch' }
+          $uninstall = Start-Process -FilePath (Join-Path $target 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -PassThru -Wait
+          if ($uninstall.ExitCode -ne 0 -or (Test-Path (Join-Path $target 'DDTool.exe'))) { throw 'Uninstall failed' }
       - name: Smoke-test the macOS package
         if: runner.os == 'macOS'
         run: |
@@ -61,7 +82,11 @@ jobs:
           python scripts/check-package-launch.py 'dist/豆荚工具.app/Contents/MacOS/DDTool'
       - name: Prepare macOS release asset
         if: runner.os == 'macOS'
-        run: cp 'dist/豆荚工具.dmg' 'dist/DDTool-macOS-arm64.dmg'
+        run: |
+          cp 'dist/豆荚工具.dmg' 'dist/DDTool-macOS-arm64.dmg'
+          pkgbuild --component 'dist/豆荚工具.app' --install-location /Applications --identifier com.ddtool.app.installer --version "$DDTOOL_VERSION" 'dist/DDTool-macOS-arm64.pkg'
+          pkgutil --payload-files 'dist/DDTool-macOS-arm64.pkg' > "$RUNNER_TEMP/ddtool-payload.txt"
+          grep -q 'Contents/MacOS/DDTool' "$RUNNER_TEMP/ddtool-payload.txt"
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}

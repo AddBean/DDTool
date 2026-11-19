@@ -26,6 +26,21 @@ Basic.ApplicationWindow {
     ]
     signal quitRequested()
 
+    Prompt {
+        id: shellRunPrompt
+        title: "在此文件夹运行操作？"
+        confirmText: "运行"
+        onAccepted: workbench.confirmShellRun(true)
+        onRejected: workbench.confirmShellRun(false)
+    }
+    Connections {
+        target: workbench
+        function onShellRunRequested(name, directory) {
+            shellRunPrompt.message = name + "\n\n工作目录：" + directory
+            shellRunPrompt.open()
+        }
+    }
+
     function persist() {
         if (visibility === Window.Windowed) {
             workbench.saveLayoutValue("width", width)

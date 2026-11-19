@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from ddtool.config import APP_TITLE, load_config
 from ddtool.icon import create_tray_icon
@@ -26,6 +27,15 @@ def smoke_test() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--remove-install-integrations"] and sys.platform == "win32" and getattr(sys, "frozen", False):
+        from ddtool.autostart import remove_install_registration
+        from ddtool.shell_shortcuts import ShortcutConfig
+        from ddtool.windows_shortcuts import apply_registration
+
+        executable = Path(sys.executable).resolve()
+        apply_registration(ShortcutConfig(), executable, only_matching=True)
+        remove_install_registration(executable)
+        raise SystemExit(0)
     if sys.argv[1:] == ["--smoke-test"]:
         raise SystemExit(smoke_test())
     if sys.argv[1:] == ["--mirror-smoke-test"]:

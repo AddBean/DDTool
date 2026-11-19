@@ -11,13 +11,16 @@ Basic.ScrollView {
     property var selected: []
     property string feedback: ""
     property bool failed: false
-    readonly property var modes: [{"key": "chooser", "label": "显示快捷列表"}].concat(workbench.shellTargets)
+    readonly property var modes: [{"key": "chooser", "label": "显示快捷列表"}]
+        .concat(workbench.mac ? [] : [{"key": "pinned", "label": "每个固定项分别显示（经典菜单）"}])
+        .concat(workbench.shellTargets)
+    readonly property bool selectsPins: behavior.currentValue === "chooser" || behavior.currentValue === "pinned"
 
     function reset() {
         enabledToggle.checked = config.enabled
         menuLabel.text = config.label
-        behavior.currentIndex = modes.findIndex(item => item.key === config.mode)
-        selected = config.targets.slice()
+        behavior.currentIndex = Math.max(0, modes.findIndex(item => item.key === config.mode))
+        selected = config.targets.filter(key => workbench.shellTargets.some(item => item.key === key))
     }
 
     function toggleTarget(key, checked) {
@@ -25,6 +28,10 @@ Basic.ScrollView {
     }
 
     Component.onCompleted: reset()
+    Connections {
+        target: workbench
+        function onShellConfigChanged() { page.reset() }
+    }
 
     ColumnLayout {
         width: page.availableWidth
@@ -61,7 +68,7 @@ Basic.ScrollView {
                     Layout.fillWidth: true
                     spacing: 6
                     Repeater {
-                        model: page.config.targets.map(key => workbench.shellTargets.find(item => item.key === key))
+                        model: page.config.targets.map(key => workbench.shellTargets.find(item => item.key === key)).filter(Boolean)
                         WorkButton {
                             required property var modelData
                             text: modelData.label
@@ -121,9 +128,9 @@ Basic.ScrollView {
                     Accessible.name: "点击系统菜单后的行为"
                     model: page.modes
                 }
-                Text { visible: behavior.currentValue === "chooser"; text: "快捷列表 · 勾选要展示的功能"; color: Theme.ink; font.pixelSize: 13 }
+                Text { visible: page.selectsPins; text: "固定项 · 勾选要展示的功能"; color: Theme.ink; font.pixelSize: 13 }
                 GridLayout {
-                    visible: behavior.currentValue === "chooser"
+                    visible: page.selectsPins
                     Layout.fillWidth: true
                     columns: width < 450 ? 1 : 2
                     columnSpacing: 12

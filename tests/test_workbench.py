@@ -12,7 +12,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QApplication
 
-from ddtool.shell_shortcuts import Activation, ShortcutConfig
+from ddtool.shell_shortcuts import Activation, ShortcutConfig, entry_token
 from ddtool.workbench import Workbench
 
 
@@ -103,3 +103,44 @@ class WorkbenchTests(unittest.TestCase):
             self.assertIn("denied", self.bridge.saveShellConfig(ShortcutConfig(True).values()))
         self.assertFalse(self.bridge.shellConfig["enabled"])
         self.assertEqual(ShortcutConfig.load(self.directory / "shell-shortcuts.json"), ShortcutConfig())
+
+    def test_tree_persists_empty_groups_and_moves_and_renames_nested_actions(self) -> None:
+        root = self.bridge.editGroup("", "开发", "create")
+        child = self.bridge.editGroup(root, "安卓", "create")
+        empty = self.bridge.editGroup("", "空分组", "create")
+        action = self.bridge.saveAction("", "编译", "echo build", "zsh", "auto", False)
+        self.assertEqual(self.bridge.moveTree(f"a:{action}", child, "inside"), f"a:{action}")
+        self.assertEqual(self.bridge.moveTree(root, child, "inside"), "")
+        self.assertEqual(self.bridge.editGroup(root, "新开发", "rename"), "g:新开发")
+        self.assertEqual(self.bridge.editGroup("g:新开发", "", "remove"), "")
+        self.assertEqual(self.bridge.moveTree("g:新开发", empty, "inside"), "g:空分组/新开发")
+        second = Workbench()
+        self.addCleanup(second.close)
+        row = next(item for item in second.actionTree if item["key"] == action)
+        self.assertEqual(row["parentKey"], "g:空分组/新开发/安卓")
+        builtin = next(item for item in second.actionTree if item["key"] == "preset-keep-awake")
+        self.assertEqual(builtin["parentKey"], "b:电源与锁屏")
+
+    def test_pinned_command_requires_confirmation_and_uses_clicked_directory(self) -> None:
+        action = self.bridge.saveAction("", "编译", "echo build", "zsh", "auto", False)
+        target = f"action:{action}"
+        requests = []
+        self.bridge.shellRunRequested.connect(lambda name, folder: requests.append((name, folder)))
+        with patch("ddtool.workbench.IS_MACOS", False), patch("ddtool.workbench.apply_integration"), \
+                patch.object(self.bridge, "_run_action") as execute:
+            self.assertEqual(self.bridge.saveShellConfig(ShortcutConfig(True, mode="pinned", targets=(target,)).values()), "")
+            self.bridge.activate_shell(Activation("directory", str(self.directory), entry_token("settings")))
+            self.assertEqual(requests, [])
+            request = Activation("directory", str(self.directory), entry_token(target))
+            self.assertEqual(Activation.decode(request.encode()), request)
+            self.bridge.activate_shell(request)
+            self.assertEqual(requests, [("编译", str(self.directory))])
+            execute.assert_not_called()
+            self.bridge.confirmShellRun(False)
+            execute.assert_not_called()
+            self.bridge.activate_shell(request)
+            self.bridge.confirmShellRun(True)
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[1], self.directory)
+            self.bridge.deleteAction(action)
+            self.assertFalse(self.bridge.shellConfig["enabled"])

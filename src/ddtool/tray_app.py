@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEvent, QLockFile, QMetaObject, QObject, Qt, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QLockFile, QMetaObject, QObject, QTimer, Qt, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtQml import QQmlApplicationEngine
@@ -139,6 +139,7 @@ def main() -> int:
         desktop.activate(activation)
     if not desktop.window.isVisible() and not desktop.window.property("canHide"):
         desktop.show()
+    QTimer.singleShot(2500, desktop.bridge.auto_check_updates)
     try:
         return app.exec()
     finally:
@@ -159,6 +160,7 @@ def _dispose_window(engine: QQmlApplicationEngine, window: QQuickWindow) -> None
 def ui_smoke_test() -> int:
     from unittest.mock import patch
 
+    from PySide6.QtCore import QPointF
     from PySide6.QtTest import QTest
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -193,6 +195,30 @@ def ui_smoke_test() -> int:
                 warnings.append("The shortcut did not receive the folder context.")
         window.setProperty("page", "actions")
         app.processEvents()
+        group_key = bridge.editGroup("", "拖拽目标", "create")
+        app.processEvents()
+        def visual_child(parent, name):
+            if parent.objectName() == name:
+                return parent
+            for child in parent.childItems():
+                if found := visual_child(child, name):
+                    return found
+            return None
+
+        handle = visual_child(window.contentItem(), f"treeDrag:a:{test_action}")
+        drop_area = visual_child(window.contentItem(), f"treeDrop:{group_key}")
+        if handle is not None and drop_area is not None:
+            source = handle.mapToScene(QPointF(handle.width() / 2, handle.height() / 2)).toPoint()
+            target = drop_area.mapToScene(QPointF(drop_area.width() - 18, drop_area.height() / 2)).toPoint()
+            QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=source)
+            QTest.mouseMove(window, source + (target - source) / 2, 30)
+            QTest.mouseMove(window, target, 30)
+            QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=target)
+            app.processEvents()
+            if not any(item["key"] == test_action and item["parentKey"] == group_key for item in bridge.actionTree):
+                warnings.append("The action did not move into the target group on drop.")
+        else:
+            warnings.append("Could not locate the tree drag handle or drop target.")
         QMetaObject.invokeMethod(window, "openPalette")
         app.processEvents()
         palette = window.findChild(QObject, "commandPalette")

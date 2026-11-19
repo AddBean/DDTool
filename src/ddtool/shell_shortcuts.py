@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
@@ -21,6 +23,14 @@ SCOPES = {"desktop", "background", "directory", "finder"}
 MAX_MESSAGE = 128 * 1024
 
 
+def valid_target(key: str) -> bool:
+    return key in TARGETS or (key.startswith("action:") and 7 < len(key) <= 256 and key.isprintable())
+
+
+def entry_token(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+
+
 @dataclass(frozen=True)
 class ShortcutConfig:
     enabled: bool = False
@@ -36,12 +46,12 @@ class ShortcutConfig:
         label = label.strip()
         if not 1 <= len(label) <= 36 or not label.isprintable() or "&" in label:
             raise ValueError("菜单名称须为 1–36 个可打印字符，且不能含 &。")
-        if mode != "chooser" and mode not in TARGETS:
+        if mode not in {"chooser", "pinned"} and not valid_target(mode):
             raise ValueError("请选择有效的直达功能。")
-        if (not isinstance(targets, list) or not all(isinstance(key, str) and key in TARGETS for key in targets)
+        if (not isinstance(targets, list) or not all(isinstance(key, str) and valid_target(key) for key in targets)
                 or len(targets) != len(set(targets))):
             raise ValueError("快捷列表包含无效或重复的功能。")
-        if enabled and mode == "chooser" and not targets:
+        if enabled and mode in {"chooser", "pinned"} and not targets:
             raise ValueError("请为快捷列表至少选择一个功能。")
         return cls(enabled, label, mode, tuple(targets))
 
@@ -73,19 +83,27 @@ class ShortcutConfig:
 class Activation:
     scope: str = ""
     directory: str = ""
+    entry: str = ""
 
     @classmethod
     def parse(cls, arguments: list[str]) -> Activation:
         if not arguments or arguments[0] != "--shell-shortcut":
             return cls()
-        if len(arguments) == 2 and arguments[1] == "desktop":
-            return cls("desktop")
-        if len(arguments) != 3 or arguments[1] not in SCOPES or not arguments[2]:
+        if len(arguments) < 2 or arguments[1] not in SCOPES:
             raise ValueError("Invalid context-menu activation")
-        return cls(arguments[1], arguments[2])
+        scope, *parameters = arguments[1:]
+        entry = ""
+        if parameters and re.fullmatch(r"--entry=[a-f0-9]{24}", parameters[0]):
+            entry = parameters.pop(0)[8:]
+        if not parameters and scope == "desktop":
+            return cls(scope, "", entry)
+        if len(parameters) != 1 or not parameters[0]:
+            raise ValueError("Invalid context-menu activation")
+        return cls(scope, parameters[0], entry)
 
     def encode(self) -> bytes:
-        return json.dumps([self.scope, self.directory], ensure_ascii=True).encode("ascii") + b"\n"
+        values = [self.scope, self.directory] + ([self.entry] if self.entry else [])
+        return json.dumps(values, ensure_ascii=True).encode("ascii") + b"\n"
 
     @classmethod
     def decode(cls, message: bytes) -> Activation:
@@ -94,9 +112,12 @@ class Activation:
         data = json.loads(message)
         if data == ["", ""]:
             return cls()
-        if not isinstance(data, list) or len(data) != 2 or not all(isinstance(item, str) for item in data):
+        if not isinstance(data, list) or len(data) not in {2, 3} or not all(isinstance(item, str) for item in data):
             raise ValueError("Invalid activation message")
-        return cls.parse(["--shell-shortcut", data[0], *([data[1]] if data[1] else [])])
+        if len(data) == 3 and re.fullmatch(r"[a-f0-9]{24}", data[2]) is None:
+            raise ValueError("Invalid entry token")
+        return cls.parse(["--shell-shortcut", data[0], *([f"--entry={data[2]}"] if len(data) == 3 else []),
+                          *([data[1]] if data[1] else [])])
 
     def existing_directory(self) -> Path | None:
         if not self.directory or "\0" in self.directory:
@@ -109,7 +130,7 @@ class Activation:
         return None
 
 
-def apply_integration(config: ShortcutConfig) -> None:
+def apply_integration(config: ShortcutConfig, labels: dict[str, str] | None = None) -> None:
     if sys.platform == "win32":
         from ddtool.windows_shortcuts import apply_registration
     elif sys.platform == "darwin":
@@ -122,4 +143,7 @@ def apply_integration(config: ShortcutConfig) -> None:
         if config.enabled:
             raise ValueError("请从安装或解压后的应用开启系统入口，源码模式不注册。")
         return
-    apply_registration(config, Path(sys.executable))
+    if sys.platform == "win32" and config.mode == "pinned":
+        apply_registration(config, Path(sys.executable), labels=labels or {})
+    else:
+        apply_registration(config, Path(sys.executable))

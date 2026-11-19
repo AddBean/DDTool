@@ -1,8 +1,15 @@
 import QtQuick
+import QtQuick.Controls.Basic as Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
-ColumnLayout {
+Basic.ScrollView {
+    id: settings
+    contentWidth: availableWidth
+    clip: true
+    Basic.ScrollBar.horizontal.policy: Basic.ScrollBar.AlwaysOff
+    ColumnLayout {
+    width: settings.availableWidth
     spacing: 15
     Section {
         Layout.fillWidth: true
@@ -54,6 +61,7 @@ ColumnLayout {
             spacing: 10
             Text { text: "启动与配置"; color: Theme.ink; font.pixelSize: 17; font.weight: Font.DemiBold }
             Toggle { text: "登录后启动并驻留托盘"; checked: workbench.autostartEnabled; onToggled: workbench.setAutostart(checked) }
+            Text { text: workbench.autostartStatus; color: Theme.muted; font.pixelSize: 12 }
             RowLayout {
                 WorkButton { text: "打开配置目录"; onClicked: workbench.openConfigDirectory() }
                 WorkButton { text: "导出 JSON"; onClicked: exportFile.open() }
@@ -61,7 +69,26 @@ ColumnLayout {
             }
         }
     }
-    Item { Layout.fillHeight: true }
+    Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: updateBox.implicitHeight + 34
+        color: Theme.panel; border.color: Theme.line; radius: 10
+        ColumnLayout {
+            id: updateBox
+            anchors.fill: parent
+            anchors.margins: 17
+            spacing: 10
+            Text { text: "应用更新 · " + workbench.appVersion; color: Theme.ink; font.pixelSize: 17; font.weight: Font.DemiBold }
+            Toggle { text: "启动后自动检查 GitHub 正式版"; checked: workbench.autoUpdates; onToggled: workbench.setAutoUpdates(checked) }
+            Text { Layout.fillWidth: true; text: workbench.updateState.message; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: Theme.muted }
+            RowLayout {
+                WorkButton { text: "检查更新"; enabled: !workbench.updateState.busy; onClicked: workbench.checkUpdates() }
+                WorkButton { text: "下载并校验"; visible: workbench.updateState.available && !workbench.updateState.downloaded; enabled: !workbench.updateState.busy; onClicked: workbench.downloadUpdate() }
+                WorkButton { text: "查看已下载文件"; visible: workbench.updateState.downloaded; onClicked: workbench.revealUpdate() }
+            }
+        }
+    }
+    }
     FileDialog {
         id: exportFile
         title: "导出豆荚工具配置"

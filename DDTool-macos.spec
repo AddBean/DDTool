@@ -2,17 +2,21 @@
 
 import os
 import re
+from pathlib import Path
 
 
 version = re.match(r'^v?(\d+\.\d+\.\d+)(?:$|[-+])', os.environ.get('DDTOOL_VERSION', ''))
 app_version = version.group(1) if version else '0.0.0'
+version_file = Path('build/ddtool-version.txt')
+version_file.parent.mkdir(exist_ok=True)
+version_file.write_text(app_version, encoding='utf-8')
 
 
 a = Analysis(
     ['src/ddtool/__main__.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('assets/tray_icon.png', 'assets'), ('src/ddtool/qml', 'ddtool/qml'), ('LICENSE', '.')],
+    datas=[('assets/tray_icon.png', 'assets'), ('src/ddtool/qml', 'ddtool/qml'), ('LICENSE', '.'), (str(version_file), '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

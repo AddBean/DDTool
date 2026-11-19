@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication
 
 from ddtool.local_activation import receive_activations
 from ddtool.macos_shortcuts import OWNER, WORKFLOW_NAME, apply_registration as apply_macos, write_workflow
-from ddtool.shell_shortcuts import MAX_MESSAGE, Activation, ShortcutConfig
+from ddtool.shell_shortcuts import MAX_MESSAGE, Activation, ShortcutConfig, entry_token
 from ddtool.windows_shortcuts import LOCATIONS, VERB, apply_registration as apply_windows, launch_command
 
 
@@ -72,6 +72,18 @@ class ShellShortcutTests(unittest.TestCase):
                 apply_windows(replace(config, label="我的入口"), executable)
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, foreign) as key:
                     self.assertEqual(winreg.QueryValueEx(key, "MUIVerb")[0], "我的入口")
+                pinned = replace(config, mode="pinned", targets=("folder", "action:sample"))
+                labels = {"folder": "打开目录", "action:sample": "构建"}
+                apply_windows(pinned, executable, labels=labels)
+                for scope, parent in locations.items():
+                    for target in pinned.targets:
+                        token = entry_token(target)
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"{parent}\{VERB}.{token}\command") as key:
+                            self.assertEqual(winreg.QueryValueEx(key, "")[0], launch_command(executable, scope, token))
+                apply_windows(ShortcutConfig(), executable, only_matching=True)
+                for parent in locations.values():
+                    with self.assertRaises(FileNotFoundError):
+                        winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"{parent}\{VERB}.{entry_token('folder')}")
                 apply_windows(ShortcutConfig(), executable)
                 for parent in locations.values():
                     with self.assertRaises(FileNotFoundError):
