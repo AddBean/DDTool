@@ -197,6 +197,7 @@ def ui_smoke_test() -> int:
         app.processEvents()
         group_key = bridge.editGroup("", "拖拽目标", "create")
         app.processEvents()
+
         def visual_child(parent, name):
             if parent.objectName() == name:
                 return parent
@@ -205,20 +206,70 @@ def ui_smoke_test() -> int:
                     return found
             return None
 
-        handle = visual_child(window.contentItem(), f"treeDrag:a:{test_action}")
-        drop_area = visual_child(window.contentItem(), f"treeDrop:{group_key}")
-        if handle is not None and drop_area is not None:
-            source = handle.mapToScene(QPointF(handle.width() / 2, handle.height() / 2)).toPoint()
-            target = drop_area.mapToScene(QPointF(drop_area.width() - 18, drop_area.height() / 2)).toPoint()
+        def point_for(name, fraction=0.5):
+            item = visual_child(window.contentItem(), name)
+            return item.mapToScene(QPointF(item.width() / 2, item.height() * fraction)).toPoint() if item is not None else None
+
+        source_name = f"treeDrag:a:{test_action}"
+        action_key = f"a:{test_action}"
+        target_name = f"treeDrop:{group_key}"
+        tree_list = visual_child(window.contentItem(), "actionTreeList")
+        initial_order = [item["treeKey"] for item in bridge.actionTree]
+        for fraction, placement, cancel in ((0.1, "before", True), (0.9, "after", False), (0.1, "before", False), (0.5, "inside", False)):
+            source = point_for(source_name)
+            target = point_for(target_name, fraction)
+            if source is None or target is None or tree_list is None:
+                warnings.append("Could not locate the tree drag handle or drop target.")
+                break
+            if placement == "inside":
+                QTest.mouseClick(window, Qt.MouseButton.LeftButton, pos=target)
+                app.processEvents()
             QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=source)
-            QTest.mouseMove(window, source + (target - source) / 2, 30)
             QTest.mouseMove(window, target, 30)
+            if tree_list.property("placement") != placement:
+                warnings.append(f"The action tree did not show the {placement} drop indicator.")
+            if cancel:
+                QTest.keyClick(window, Qt.Key.Key_Escape)
             QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=target)
             app.processEvents()
-            if not any(item["key"] == test_action and item["parentKey"] == group_key for item in bridge.actionTree):
-                warnings.append("The action did not move into the target group on drop.")
-        else:
-            warnings.append("Could not locate the tree drag handle or drop target.")
+            order = [item["treeKey"] for item in bridge.actionTree]
+            if cancel:
+                if tree_list.property("dragging") or order != initial_order:
+                    warnings.append("Escape did not cancel the pending move.")
+            elif placement in {"before", "after"}:
+                offset = -1 if placement == "before" else 1
+                if order.index(action_key) != order.index(group_key) + offset:
+                    warnings.append(f"The action was not dropped {placement} the target group.")
+            elif placement == "inside" and not (
+                any(item["treeKey"] == action_key and item["parentKey"] == group_key for item in bridge.actionTree)
+                and point_for(source_name) is not None
+            ):
+                warnings.append("Dropping into a collapsed group did not move and reveal the action.")
+
+        if tree_list is not None:
+            scroll_groups = [bridge.editGroup("", f"滚动测试 {index + 1}", "create") for index in range(32)]
+            app.processEvents()
+            source = point_for(source_name)
+            edge = tree_list.mapToScene(QPointF(tree_list.width() / 2, tree_list.height() - 6)).toPoint()
+            original_y = tree_list.property("contentY")
+            if source is None:
+                warnings.append("Could not locate the action for the auto-scroll drag.")
+            else:
+                QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=source)
+                QTest.mouseMove(window, edge, 30)
+                QTest.qWait(800)
+                scroll_distance = tree_list.property("contentY") - original_y
+                target_key = tree_list.property("targetKey")
+                placement = tree_list.property("placement")
+                QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=edge)
+                app.processEvents()
+                if scroll_distance <= 320 or target_key not in scroll_groups:
+                    warnings.append("Dragging near the bottom did not scroll to a distant drop target.")
+                else:
+                    order = [item["treeKey"] for item in bridge.actionTree]
+                    offset = -1 if placement == "before" else 1
+                    if order.index(action_key) != order.index(target_key) + offset:
+                        warnings.append("Releasing after auto-scroll did not drop at the indicated location.")
         QMetaObject.invokeMethod(window, "openPalette")
         app.processEvents()
         palette = window.findChild(QObject, "commandPalette")
@@ -226,6 +277,9 @@ def ui_smoke_test() -> int:
             warnings.append("The command palette did not open.")
         QTest.keyClick(window, Qt.Key.Key_Escape)
         bridge.deleteAction(test_action)
+        if tree_list is not None:
+            for key in scroll_groups:
+                bridge.editGroup(key, "", "remove")
         bridge.setAppearance("light", "blue", True)
         app.processEvents()
         bridge.setAppearance("dark", "mint", False)

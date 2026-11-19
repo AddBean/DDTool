@@ -58,7 +58,32 @@ ColumnLayout {
         groupName.forceActiveFocus()
     }
     function moveItem(sourceKey, targetKey, placement) {
-        if (workbench.moveTree(sourceKey, targetKey, placement) && selected) setFields()
+        const result = workbench.moveTree(sourceKey, targetKey, placement)
+        if (!result) return
+        if (placement === "inside") {
+            const state = Object.assign({}, folded)
+            delete state[targetKey]
+            folded = state
+        }
+        const moved = workbench.actionTree.find(item => item.treeKey === result)
+        if (moved) selectedGroup = moved.groupRow ? moved.treeKey : moved.parentKey
+        const index = filtered.findIndex(item => item.treeKey === result)
+        if (index >= 0) list.positionViewAtIndex(index, ListView.Contain)
+        if (selected) setFields()
+    }
+    function canMoveInto(sourceKey, parentKey) {
+        return sourceKey !== parentKey && !(sourceKey.startsWith("g:") && parentKey.startsWith(sourceKey + "/"))
+    }
+    function chooseDestination(sourceKey) {
+        const source = workbench.actionTree.find(item => item.treeKey === sourceKey)
+        if (!source) return
+        moveDialog.sourceKey = sourceKey
+        moveDialog.parentKey = source.parentKey
+        destination.model = workbench.actionTree.filter(item => item.groupRow && !item.preset
+            && view.canMoveInto(sourceKey, item.treeKey)).map(item => ({ key: item.treeKey, label: item.group || item.name }))
+        destination.currentIndex = Math.max(0, destination.indexOfValue(source.parentKey))
+        moveDialog.open()
+        destination.forceActiveFocus()
     }
     function rowMenu(item, row) {
         if (item.groupRow) {
@@ -96,7 +121,7 @@ ColumnLayout {
         Section {
             Layout.fillWidth: true
             title: "快捷操作"
-            description: "拖住行尾手柄调整位置；放到分组中间可移入分组。"
+            description: "管理自定义操作和内置工具。"
         }
         WorkButton { text: view.showDetails ? "隐藏详情" : "显示详情"; onClicked: view.showDetails = !view.showDetails }
         WorkButton { text: "分组"; iconName: "folder-plus"; onClicked: view.groupEditor("create", "", "") }
@@ -127,17 +152,129 @@ ColumnLayout {
                 Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
                 ListView {
                     id: list
+                    objectName: "actionTreeList"
+                    property string sourceKey: ""
+                    property string targetKey: ""
+                    property string placement: ""
+                    property string dropHint: "拖到自定义分组或操作上"
+                    property bool dragging: false
+                    property point pressPoint
+                    property point pointerPosition
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     model: view.filtered
                     clip: true
                     spacing: 3
                     Basic.ScrollBar.vertical: Basic.ScrollBar { }
+
+                    function rowAt(point) {
+                        return itemAt(contentX + point.x, contentY + point.y)
+                    }
+                    function updateTarget() {
+                        targetKey = ""
+                        placement = ""
+                        dropHint = "松手可取消 · Esc 取消"
+                        const point = pointerPosition
+                        if (point.x < 0 || point.x >= width || point.y < 0 || point.y >= height) return
+                        const row = rowAt(point) || rowAt(Qt.point(point.x, point.y + spacing))
+                            || rowAt(Qt.point(point.x, point.y - spacing))
+                        if (!row || row.modelData.preset || row.modelData.treeKey === sourceKey) return
+                        const item = row.modelData
+                        const fraction = mapToItem(row, point.x, point.y).y / row.height
+                        const position = item.treeKey === "u:" ? "inside" : item.groupRow
+                            ? (fraction < 0.25 ? "before" : fraction > 0.75 ? "after" : "inside")
+                            : (fraction < 0.5 ? "before" : "after")
+                        if (!view.canMoveInto(sourceKey, position === "inside" ? item.treeKey : item.parentKey)) return
+                        targetKey = item.treeKey
+                        placement = position
+                        dropHint = (position === "inside" ? "移入分组：" : position === "before" ? "插到前面：" : "插到后面：") + item.name
+                    }
+                    function clearDrag() {
+                        sourceKey = ""
+                        targetKey = ""
+                        placement = ""
+                        dragging = false
+                    }
+                    onModelChanged: clearDrag()
+
+                    Shortcut { sequence: "Escape"; enabled: list.dragging; onActivated: list.clearDrag() }
+                    Timer {
+                        interval: 16
+                        repeat: true
+                        running: list.dragging
+                        onTriggered: {
+                            const point = list.pointerPosition
+                            if (point.x < 0 || point.x >= list.width || point.y < 0 || point.y >= list.height) return
+                            const edge = Math.min(list.height / 4, 46)
+                            const speed = point.y < edge ? -(edge - point.y) : Math.max(0, point.y - (list.height - edge))
+                            if (!speed) return
+                            const next = Math.max(list.originY, Math.min(list.originY + Math.max(0, list.contentHeight - list.height), list.contentY + speed / 3))
+                            if (next === list.contentY) return
+                            list.contentY = next
+                            list.updateTarget()
+                        }
+                    }
+                    MouseArea {
+                        id: dragHandle
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        width: 44
+                        z: 3
+                        enabled: !search.text.trim()
+                        preventStealing: true
+                        cursorShape: list.dragging ? Qt.ClosedHandCursor : overGrip ? Qt.OpenHandCursor : Qt.ArrowCursor
+                        hoverEnabled: true
+                        readonly property bool overGrip: {
+                            const scrollPosition = list.contentY
+                            return containsMouse && gripAt(mapToItem(list, mouseX, mouseY), scrollPosition)
+                        }
+
+                        function gripAt(point, scrollPosition) {
+                            const row = list.itemAt(list.contentX + point.x, scrollPosition + point.y)
+                            if (!row || !row.grip.visible) return false
+                            const local = list.mapToItem(row.grip, point.x, point.y)
+                            return local.x >= 0 && local.x < row.grip.width && local.y >= 0 && local.y < row.grip.height
+                        }
+                        onPressed: mouse => {
+                            const point = mapToItem(list, mouse.x, mouse.y)
+                            if ((workbench.mac && mouse.modifiers & Qt.MetaModifier) || !gripAt(point, list.contentY)) {
+                                mouse.accepted = false
+                                return
+                            }
+                            list.cancelFlick()
+                            list.pressPoint = point
+                            list.sourceKey = list.rowAt(point).modelData.treeKey
+                        }
+                        onPositionChanged: mouse => {
+                            if (!pressed || !list.sourceKey) return
+                            const point = mapToItem(list, mouse.x, mouse.y)
+                            if (!list.dragging && Math.hypot(point.x - list.pressPoint.x, point.y - list.pressPoint.y) < 6) return
+                            list.pointerPosition = point
+                            list.updateTarget()
+                            list.dragging = true
+                        }
+                        onReleased: mouse => {
+                            if (list.dragging) {
+                                list.pointerPosition = mapToItem(list, mouse.x, mouse.y)
+                                list.updateTarget()
+                                if (list.targetKey) Qt.callLater(view.moveItem, list.sourceKey, list.targetKey, list.placement)
+                            }
+                            list.clearDrag()
+                        }
+                        onCanceled: list.clearDrag()
+                    }
                     delegate: Basic.ItemDelegate {
                         id: row
                         required property var modelData
-                        width: list.width
+                        readonly property alias grip: grip
+                        readonly property string dropPosition: list.targetKey === modelData.treeKey ? list.placement : ""
+                        objectName: "treeDrop:" + modelData.treeKey
+                        width: list.width - 10
                         height: Theme.rowHeight
+                        rightPadding: 8
+                        opacity: list.dragging && list.sourceKey === modelData.treeKey ? 0.5 : 1
                         text: modelData.name
                         hoverEnabled: true
                         activeFocusOnTab: true
@@ -145,8 +282,8 @@ ColumnLayout {
                         onClicked: view.chooseRow(modelData)
                         background: Rectangle {
                             radius: 6
-                            color: row.modelData.groupRow ? Theme.inset : view.selectedKey === row.modelData.key ? Theme.accentWash : row.hovered ? Theme.hover : "transparent"
-                            border.color: row.visualFocus || dropZone.containsDrag ? Theme.accent : "transparent"
+                            color: row.dropPosition === "inside" ? Theme.accentWash : row.modelData.groupRow ? Theme.inset : view.selectedKey === row.modelData.key ? Theme.accentWash : row.hovered ? Theme.hover : "transparent"
+                            border.color: row.visualFocus || row.dropPosition === "inside" ? Theme.accent : "transparent"
                         }
                         contentItem: RowLayout {
                             spacing: 9
@@ -170,45 +307,25 @@ ColumnLayout {
                                 iconName: workbench.shellConfig.targets.includes("action:" + row.modelData.key) ? "pin-off" : "pin"
                                 onClicked: view.pin(row.modelData.key)
                             }
-                            Item {
-                                Layout.preferredWidth: 22
+                            Rectangle {
+                                id: grip
+                                objectName: "treeDrag:" + row.modelData.treeKey
+                                Layout.preferredWidth: 36
                                 Layout.fillHeight: true
                                 visible: !row.modelData.preset && row.modelData.treeKey !== "u:" && !search.text.trim()
+                                color: row.hovered && dragHandle.overGrip ? Theme.hover : "transparent"
+                                radius: 6
                                 Icon { name: "grip-vertical"; tint: Theme.muted; anchors.centerIn: parent }
-                                MouseArea {
-                                    objectName: "treeDrag:" + row.modelData.treeKey
-                                    anchors.fill: parent
-                                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-                                    drag.target: dragToken
-                                    drag.smoothed: false
-                                    onPressed: mouse => { dragToken.x = mouse.x; dragToken.y = mouse.y }
-                                    onReleased: if (drag.active) dragToken.Drag.drop()
-                                    Item {
-                                        id: dragToken
-                                        width: 1; height: 1
-                                        Drag.active: parent.drag.active
-                                        Drag.source: row
-                                        Drag.keys: ["ddtool-tree"]
-                                    }
-                                }
                             }
                         }
-                        DropArea {
-                            id: dropZone
-                            objectName: "treeDrop:" + row.modelData.treeKey
-                            anchors.fill: parent
-                            enabled: !row.modelData.preset && !search.text.trim()
-                            keys: ["ddtool-tree"]
-                            onDropped: drop => {
-                                if (!drop.source || drop.source === row) return
-                                const placement = row.modelData.treeKey === "u:" ? "inside"
-                                    : drop.y < height * 0.30 ? "before"
-                                    : drop.y > height * 0.70 || !row.modelData.groupRow ? "after" : "inside"
-                                const sourceKey = drop.source.modelData.treeKey
-                                const targetKey = row.modelData.treeKey
-                                drop.acceptProposedAction()
-                                Qt.callLater(view.moveItem, sourceKey, targetKey, placement)
-                            }
+                        Rectangle {
+                            visible: row.dropPosition === "before" || row.dropPosition === "after"
+                            x: row.leftPadding
+                            y: row.dropPosition === "before" ? 0 : row.height - height
+                            width: row.width - x - 4
+                            height: 3
+                            radius: 1.5
+                            color: Theme.accent
                         }
                         TapHandler {
                             acceptedButtons: Qt.RightButton
@@ -234,6 +351,16 @@ ColumnLayout {
                         color: Theme.muted
                         font.pixelSize: 13
                     }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: list.dragging ? list.dropHint : search.text.trim()
+                        ? "搜索时可右键选择“移动到分组”。"
+                        : "拖动行尾手柄排序，放到分组中间可移入。"
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: list.dragging && list.targetKey ? Theme.accent : Theme.muted
+                    font.pixelSize: 12
                 }
             }
         }
@@ -399,6 +526,32 @@ ColumnLayout {
             }
         }
     }
+    Basic.Dialog {
+        id: moveDialog
+        property string sourceKey
+        property string parentKey
+        anchors.centerIn: Basic.Overlay.overlay
+        modal: true
+        width: 340
+        background: Rectangle { color: Theme.panel; border.color: Theme.line; radius: 10 }
+        contentItem: ColumnLayout {
+            Text { text: "移动到分组"; color: Theme.ink; font.pixelSize: 18 }
+            Choice { id: destination; Layout.fillWidth: true; Accessible.name: "目标分组" }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                WorkButton { text: "取消"; onClicked: moveDialog.close() }
+                WorkButton {
+                    text: "移动"
+                    primary: true
+                    enabled: destination.currentIndex >= 0 && destination.currentValue !== moveDialog.parentKey
+                    onClicked: {
+                        view.moveItem(moveDialog.sourceKey, destination.currentValue, "inside")
+                        moveDialog.close()
+                    }
+                }
+            }
+        }
+    }
     Basic.Menu {
         id: groupMenu
         property var itemData: null
@@ -410,6 +563,7 @@ ColumnLayout {
         }
         Basic.Action { text: "新建子分组"; onTriggered: view.groupEditor("create", groupMenu.itemData.treeKey === "u:" ? "" : groupMenu.itemData.treeKey, "") }
         Basic.Action { text: "重命名"; enabled: groupMenu.itemData && groupMenu.itemData.treeKey !== "u:"; onTriggered: view.groupEditor("rename", groupMenu.itemData.treeKey, groupMenu.itemData.name) }
+        Basic.Action { text: "移动到分组…"; enabled: groupMenu.itemData && groupMenu.itemData.treeKey !== "u:"; onTriggered: view.chooseDestination(groupMenu.itemData.treeKey) }
         Basic.Action { text: "删除空分组"; enabled: groupMenu.itemData && groupMenu.itemData.treeKey !== "u:"; onTriggered: workbench.editGroup(groupMenu.itemData.treeKey, "", "remove") }
     }
     Basic.Menu {
@@ -423,6 +577,7 @@ ColumnLayout {
         }
         Basic.Action { text: "运行"; enabled: !workbench.busy; onTriggered: workbench.runAction(view.selectedKey) }
         Basic.Action { text: "查看详情"; onTriggered: view.showDetails = true }
+        Basic.Action { text: "移动到分组…"; enabled: !view.readOnly; onTriggered: view.chooseDestination("a:" + view.selectedKey) }
         Basic.Action { text: "上移"; enabled: !view.readOnly; onTriggered: workbench.moveAction(view.selectedKey, -1) }
         Basic.Action { text: "下移"; enabled: !view.readOnly; onTriggered: workbench.moveAction(view.selectedKey, 1) }
         Basic.Action { text: "删除"; enabled: !view.readOnly; onTriggered: view.askDelete() }
