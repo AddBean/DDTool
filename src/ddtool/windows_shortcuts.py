@@ -20,6 +20,11 @@ def launch_command(executable: Path, scope: str, entry: str = "") -> str:
     return command + {"directory": r' "%1\."', "background": r' "%V\."', "desktop": ""}[scope]
 
 
+def plain_menu_label(label: str) -> str:
+    label = "".join(char for char in label if char.isprintable()).strip().replace("&", "&&")[:80]
+    return "＠" + label[1:] if label.startswith("@") else label
+
+
 def apply_registration(config: ShortcutConfig, executable: Path, *, only_matching: bool = False,
                        labels: dict[str, str] | None = None) -> None:
     import winreg
@@ -34,10 +39,10 @@ def apply_registration(config: ShortcutConfig, executable: Path, *, only_matchin
                 for target in config.targets:
                     if target in labels:
                         token = entry_token(target)
-                        label = "".join(char for char in labels[target] if char.isprintable()).replace("&", "&&")[:80]
-                        desired[rf"{parent}\{VERB}.{token}"] = (scope, label or config.label, token)
+                        label = plain_menu_label(labels[target]) or plain_menu_label(config.label)
+                        desired[rf"{parent}\{VERB}.{token}"] = (scope, label, token)
             else:
-                desired[rf"{parent}\{VERB}"] = (scope, config.label, "")
+                desired[rf"{parent}\{VERB}"] = (scope, plain_menu_label(config.label), "")
         try:
             with winreg.OpenKey(root, parent) as parent_key:
                 names = [winreg.EnumKey(parent_key, index) for index in range(winreg.QueryInfoKey(parent_key)[0])]

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication
 from ddtool.local_activation import receive_activations
 from ddtool.macos_shortcuts import OWNER, WORKFLOW_NAME, apply_registration as apply_macos, write_workflow
 from ddtool.shell_shortcuts import MAX_MESSAGE, Activation, ShortcutConfig, entry_token
-from ddtool.windows_shortcuts import LOCATIONS, VERB, apply_registration as apply_windows, launch_command
+from ddtool.windows_shortcuts import LOCATIONS, VERB, apply_registration as apply_windows, launch_command, plain_menu_label
 
 
 class ShellShortcutTests(unittest.TestCase):
@@ -49,6 +49,9 @@ class ShellShortcutTests(unittest.TestCase):
         for scope, expected in (("desktop", ""), ("background", r' "%V\."'), ("directory", r' "%1\."')):
             with self.subTest(scope=scope):
                 self.assertEqual(launch_command(executable, scope), f'"{executable}" --shell-shortcut {scope}{expected}')
+
+    def test_windows_menu_labels_do_not_expand_resources_or_mnemonics(self) -> None:
+        self.assertEqual(plain_menu_label(" @资源&工具\n "), "＠资源&&工具")
 
     @unittest.skipUnless(sys.platform == "win32", "requires the Windows registry")
     def test_windows_real_registry_isolated_registration(self) -> None:
