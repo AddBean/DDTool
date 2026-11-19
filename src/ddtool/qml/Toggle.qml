@@ -22,11 +22,12 @@ Basic.CheckBox {
         color: control.checked ? Theme.accent : Theme.inset
         border.color: control.checked || control.visualFocus ? Theme.accent : Theme.line
         border.width: control.visualFocus ? 2 : 1
-        Text {
+        Icon {
             anchors.centerIn: parent
-            text: control.checked ? "✓" : ""
-            color: Theme.onAccent
-            font.bold: true
+            visible: control.checked
+            name: "check"
+            size: 14
+            tint: Theme.onAccent
         }
     }
 }

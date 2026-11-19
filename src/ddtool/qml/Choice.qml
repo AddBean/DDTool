@@ -16,11 +16,11 @@ Basic.ComboBox {
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
-    indicator: Text {
+    indicator: Icon {
         x: control.width - width - 9
         anchors.verticalCenter: parent.verticalCenter
-        text: "⌄"
-        color: Theme.muted
+        name: "chevron-down"
+        tint: Theme.muted
     }
     background: Rectangle {
         radius: 7

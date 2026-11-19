@@ -17,12 +17,12 @@ Basic.ApplicationWindow {
     property string page: "actions"
     property bool collapsed: workbench.layoutValue("collapsed") !== 0
     readonly property var pages: [
-        {"key": "actions", "label": "快捷操作", "icon": "›_"},
-        {"key": "devices", "label": "手机工具", "icon": "▯"},
-        {"key": "power", "label": "电源与锁屏", "icon": "◔"},
-        {"key": "activity", "label": "运行动态", "icon": "≡"},
-        {"key": "context", "label": "系统右键", "icon": "↗"},
-        {"key": "settings", "label": "设置", "icon": "⊡"}
+        {"key": "actions", "label": "快捷操作", "icon": "terminal"},
+        {"key": "devices", "label": "手机工具", "icon": "smartphone"},
+        {"key": "power", "label": "电源与锁屏", "icon": "power"},
+        {"key": "activity", "label": "运行动态", "icon": "activity"},
+        {"key": "context", "label": "系统右键", "icon": "mouse-pointer-2"},
+        {"key": "settings", "label": "设置", "icon": "settings"}
     ]
     signal quitRequested()
 
@@ -102,21 +102,22 @@ Basic.ApplicationWindow {
                     Layout.preferredHeight: 27
                     radius: 8
                     color: Theme.accent
-                    Text { anchors.centerIn: parent; text: "D"; color: Theme.onAccent; font.pixelSize: 16; font.bold: true }
+                    Icon { anchors.centerIn: parent; name: "wrench"; tint: Theme.onAccent }
                 }
                 Text { text: "豆荚工具"; color: Theme.ink; font.pixelSize: 14; font.weight: Font.DemiBold }
                 Text { text: "/  工作台"; color: Theme.muted; font.pixelSize: 12 }
                 Item { Layout.fillWidth: true }
                 WorkButton {
                     Layout.preferredWidth: 154
-                    text: "搜索操作       " + (workbench.mac ? "⌘ K" : "Ctrl K")
+                    text: "搜索操作  " + (workbench.mac ? "⌘ K" : "Ctrl K")
+                    iconName: "search"
                     Accessible.name: "打开命令面板"
                     onClicked: window.openPalette()
                 }
                 Item { Layout.preferredWidth: 10 }
-                WorkButton { text: "—"; quiet: true; Accessible.name: "最小化"; onClicked: window.showMinimized() }
-                WorkButton { text: window.visibility === Window.Maximized ? "❐" : "□"; quiet: true; Accessible.name: "切换最大化"; onClicked: window.toggleMaximized() }
-                WorkButton { text: "×"; quiet: true; Accessible.name: window.canHide ? "关闭窗口并驻留托盘" : "关闭窗口"; onClicked: window.close() }
+                WorkButton { iconName: "minus"; quiet: true; Accessible.name: "最小化"; onClicked: window.showMinimized() }
+                WorkButton { iconName: window.visibility === Window.Maximized ? "minimize-2" : "maximize-2"; quiet: true; Accessible.name: "切换最大化"; onClicked: window.toggleMaximized() }
+                WorkButton { iconName: "x"; quiet: true; Accessible.name: window.canHide ? "关闭窗口并驻留托盘" : "关闭窗口"; onClicked: window.close() }
             }
         }
         RowLayout {
@@ -135,7 +136,7 @@ Basic.ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true
                         Text { Layout.fillWidth: true; visible: window.width >= 910 && !window.collapsed; leftPadding: 8; text: "工作区"; color: Theme.muted; font.pixelSize: 11; font.weight: Font.DemiBold }
-                        WorkButton { text: "≡"; quiet: true; Accessible.name: "切换侧栏"; enabled: window.width >= 910; onClicked: { window.collapsed = !window.collapsed; window.persist() } }
+                        WorkButton { iconName: "panel-left"; quiet: true; Accessible.name: "切换侧栏"; enabled: window.width >= 910; onClicked: { window.collapsed = !window.collapsed; window.persist() } }
                     }
                     Repeater {
                         model: window.pages
@@ -162,7 +163,7 @@ Basic.ApplicationWindow {
                             }
                             contentItem: RowLayout {
                                 spacing: 7
-                                Text { text: nav.modelData.icon; font.family: Theme.mono; color: Theme.accent; Layout.preferredWidth: 17; font.pixelSize: 15 }
+                                Icon { name: nav.modelData.icon; tint: Theme.accent; size: 17 }
                                 Text { Layout.fillWidth: true; visible: !window.collapsed && window.width >= 910; text: nav.modelData.label; color: Theme.ink; font.pixelSize: 13 }
                             }
                             Basic.ToolTip.visible: hovered && (window.collapsed || window.width < 910)
@@ -213,7 +214,7 @@ Basic.ApplicationWindow {
                     elide: Text.ElideRight
                     font.pixelSize: 12
                 }
-                WorkButton { text: "运行动态 ↗"; quiet: true; implicitHeight: 28; onClicked: window.page = "activity" }
+                WorkButton { text: "运行动态"; iconName: "arrow-up-right"; quiet: true; implicitHeight: 28; onClicked: window.page = "activity" }
             }
         }
     }

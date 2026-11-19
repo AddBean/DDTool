@@ -41,6 +41,6 @@ ColumnLayout {
             }
         }
     }
-    WorkButton { text: "查看运行动态 →"; onClicked: view.showActivity() }
+    WorkButton { text: "查看运行动态"; iconName: "arrow-right"; onClicked: view.showActivity() }
     Item { Layout.fillHeight: true }
 }

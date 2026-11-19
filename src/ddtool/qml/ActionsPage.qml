@@ -96,11 +96,11 @@ ColumnLayout {
         Section {
             Layout.fillWidth: true
             title: "快捷操作"
-            description: "拖住 ⋮⋮ 调整位置；放到分组中间可移入分组。"
+            description: "拖住行尾手柄调整位置；放到分组中间可移入分组。"
         }
         WorkButton { text: view.showDetails ? "隐藏详情" : "显示详情"; onClicked: view.showDetails = !view.showDetails }
-        WorkButton { text: "+ 分组"; onClicked: view.groupEditor("create", "", "") }
-        WorkButton { text: "+ 新建操作"; primary: true; onClicked: view.createAction() }
+        WorkButton { text: "分组"; iconName: "folder-plus"; onClicked: view.groupEditor("create", "", "") }
+        WorkButton { text: "新建操作"; iconName: "plus"; primary: true; onClicked: view.createAction() }
     }
 
     Basic.SplitView {
@@ -155,7 +155,7 @@ ColumnLayout {
                                 Layout.preferredHeight: 27
                                 radius: 6
                                 color: Theme.inset
-                                Text { anchors.centerIn: parent; text: row.modelData.groupRow ? (view.folded[row.modelData.treeKey] ? "›" : "⌄") : row.modelData.builtin ? "◆" : "›_"; color: Theme.accent; font.family: Theme.mono; font.pixelSize: 12 }
+                                Icon { anchors.centerIn: parent; size: 15; tint: Theme.accent; name: row.modelData.groupRow ? (view.folded[row.modelData.treeKey] ? "chevron-right" : "chevron-down") : row.modelData.builtin ? "shield" : "terminal" }
                             }
                             ColumnLayout {
                                 Layout.fillWidth: true
@@ -167,13 +167,14 @@ ColumnLayout {
                                 visible: !row.modelData.groupRow
                                 quiet: true
                                 text: workbench.shellConfig.targets.includes("action:" + row.modelData.key) ? "取消固定" : "固定到右键"
+                                iconName: workbench.shellConfig.targets.includes("action:" + row.modelData.key) ? "pin-off" : "pin"
                                 onClicked: view.pin(row.modelData.key)
                             }
                             Item {
                                 Layout.preferredWidth: 22
                                 Layout.fillHeight: true
                                 visible: !row.modelData.preset && row.modelData.treeKey !== "u:" && !search.text.trim()
-                                Text { text: "⋮⋮"; color: Theme.muted; anchors.centerIn: parent }
+                                Icon { name: "grip-vertical"; tint: Theme.muted; anchors.centerIn: parent }
                                 MouseArea {
                                     objectName: "treeDrag:" + row.modelData.treeKey
                                     anchors.fill: parent
@@ -310,7 +311,10 @@ ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 13
                         spacing: 5
-                        Text { text: "◆  系统能力"; color: Theme.accent; font.pixelSize: 13; font.weight: Font.DemiBold }
+                        RowLayout {
+                            Icon { name: "shield"; size: 15; tint: Theme.accent }
+                            Text { text: "系统能力"; color: Theme.accent; font.pixelSize: 13; font.weight: Font.DemiBold }
+                        }
                         Text {
                             Layout.fillWidth: true
                             text: view.selected && view.selected.command === "ddtool:keep-awake"
