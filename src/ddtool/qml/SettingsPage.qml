@@ -83,6 +83,7 @@ Basic.ScrollView {
             Text { Layout.fillWidth: true; text: workbench.updateState.message; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: Theme.muted }
             RowLayout {
                 WorkButton { text: "检查更新"; enabled: !workbench.updateState.busy; onClicked: workbench.checkUpdates() }
+                WorkButton { text: "打开发布页"; onClicked: workbench.openReleasePage() }
                 WorkButton { text: "下载并校验"; visible: workbench.updateState.available && !workbench.updateState.downloaded; enabled: !workbench.updateState.busy; onClicked: workbench.downloadUpdate() }
                 WorkButton { text: "查看已下载文件"; visible: workbench.updateState.downloaded; onClicked: workbench.revealUpdate() }
             }

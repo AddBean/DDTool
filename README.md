@@ -114,7 +114,7 @@ chmod +x scripts/build-macos.sh
 
 `main` 的 GitHub Actions 构建同时提供 Windows `DDTool-Windows-x64-Setup.exe`（当前用户安装，支持卸载）及 macOS `DDTool-macOS-arm64.pkg`（安装至 `/Applications`）。便携 ZIP 和 DMG 仍保留。Windows 安装包未签名，macOS 安装包未使用 Developer ID 签名或公证，两端系统都可能提示或阻止打开。
 
-正式版默认在启动后检查 GitHub Release，可在设置关闭。发现新版后可在设置下载，并按 GitHub 提供的 SHA-256 核对后手动安装。未打版本标签的 CI 测试包不参与正式版更新，避免误降级。
+正式版默认在启动后检查 GitHub Release，可在设置关闭。GitHub API 限流时会改用公开发布页与校验文件检查，也可在设置点「打开发布页」手动下载。应用内下载通过 SHA-256 校验后再手动安装。未打版本标签的 CI 测试包不参与正式版更新，避免误降级。
 
 ## 发布版本
 

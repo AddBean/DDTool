@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -19,6 +20,7 @@ from ddtool.resources import app_base_dir
 
 REPO = "AddBean/DDTool"
 RELEASE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASE_PAGE = f"https://github.com/{REPO}/releases/latest"
 VERSION = re.compile(r"(?:v)?(\d{1,6})\.(\d{1,6})\.(\d{1,6})\Z")
 DOWNLOAD_LIMIT = 512 * 1024 * 1024
 
@@ -27,7 +29,7 @@ DOWNLOAD_LIMIT = 512 * 1024 * 1024
 class Release:
     tag: str
     name: str
-    size: int
+    size: int | None
     digest: str
 
     @property
@@ -102,27 +104,63 @@ def check_release() -> Release | None:
     names = asset_names(sys.platform, platform.machine(), installed)
     if not names:
         raise ValueError("当前系统或架构没有可用的更新包。")
-    data = json.loads(_metadata(RELEASE_API, 512 * 1024, "api.github.com"))
-    return parse_release(data, current_version(), names)
+    return find_release(current_version(), names)
+
+
+def find_release(current: str, names: tuple[str, ...]) -> Release | None:
+    try:
+        data = json.loads(_metadata(RELEASE_API, 512 * 1024, "api.github.com"))
+    except HTTPError as error:
+        if error.code not in {403, 429}:
+            raise
+        error.close()
+        try:
+            return _find_public_release(current, names)
+        except (OSError, ValueError) as fallback_error:
+            raise ValueError("GitHub API 限流或拒绝访问，备用检查也未成功；请打开发布页手动下载。") from fallback_error
+    return parse_release(data, current, names)
+
+
+def _find_public_release(current: str, names: tuple[str, ...]) -> Release | None:
+    with _open(RELEASE_PAGE, "github.com") as response:
+        path = urlsplit(response.geturl()).path
+    match = re.fullmatch(rf"/{re.escape(REPO)}/releases/tag/(v[0-9]+\.[0-9]+\.[0-9]+)/?", path, re.IGNORECASE)
+    if not match:
+        raise ValueError("公开发布页没有返回可识别的正式版标签。")
+    tag = match[1].lower()
+    if version_tuple(tag) <= version_tuple(current):
+        return None
+    checksums = _manifest_digests(tag)
+    for name in names:
+        if name in checksums:
+            return Release(tag, name, None, checksums[name])
+    raise ValueError("未找到适用于当前平台且有校验值的安装包。")
+
+
+def _manifest_digests(tag: str) -> dict[str, str]:
+    url = f"https://github.com/{REPO}/releases/download/{tag}/SHA256SUMS.txt"
+    data = _metadata(url, 64 * 1024, "github.com", "release-assets.githubusercontent.com").decode("utf-8")
+    found = {}
+    for line in data.splitlines():
+        match = re.fullmatch(r"([a-fA-F0-9]{64}) [ *](?:release-assets/)?(.+)", line)
+        if match:
+            if match[2] in found:
+                raise ValueError("发行包校验清单中包含重复的文件名。")
+            found[match[2]] = match[1].lower()
+    return found
 
 
 def _checksum_manifest(release: Release) -> str:
-    url = f"https://github.com/{REPO}/releases/download/{release.tag}/SHA256SUMS.txt"
-    data = _metadata(url, 64 * 1024, "github.com", "release-assets.githubusercontent.com").decode("utf-8")
-    found = []
-    for line in data.splitlines():
-        match = re.fullmatch(r"([a-fA-F0-9]{64}) [ *](?:release-assets/)?(.+)", line)
-        if match and match[2] == release.name:
-            found.append(match[1].lower())
-    if len(found) != 1:
+    digest = _manifest_digests(release.tag).get(release.name)
+    if not digest:
         raise ValueError("未找到唯一的发行包 SHA-256 校验值。")
-    return found[0]
+    return digest
 
 
 def download_release(release: Release, directory: Path, cancelled: Callable[[], bool] | None = None) -> Path:
     if not VERSION.fullmatch(release.tag) or release.name not in {
         *asset_names("win32", "amd64", True), *asset_names("darwin", "arm64", True),
-    } or not 0 < release.size <= DOWNLOAD_LIMIT:
+    } or (release.size is not None and not 0 < release.size <= DOWNLOAD_LIMIT):
         raise ValueError("发行包参数无效。")
     expected = release.digest or _checksum_manifest(release)
     directory = directory / release.tag
@@ -140,11 +178,11 @@ def download_release(release: Release, directory: Path, cancelled: Callable[[], 
                 if cancelled is not None and cancelled():
                     raise ValueError("下载已取消。")
                 count += len(chunk)
-                if count > release.size or time.monotonic() > deadline:
+                if count > (release.size or DOWNLOAD_LIMIT) or time.monotonic() > deadline:
                     raise ValueError("下载超出声明的大小或时间上限。")
                 digest.update(chunk)
                 stream.write(chunk)
-        if count != release.size or digest.hexdigest() != expected:
+        if (release.size is not None and count != release.size) or digest.hexdigest() != expected:
             raise ValueError("下载包完整性校验失败，文件未保留。")
         os.replace(temporary, destination)
     finally:

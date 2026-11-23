@@ -403,6 +403,10 @@ class Workbench(QObject):
         if self._download is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._download.parent)))
 
+    @Slot()
+    def openReleasePage(self) -> None:
+        QDesktopServices.openUrl(QUrl(updates.RELEASE_PAGE))
+
     def _start_update(self, operation: str, callback: Callable) -> None:
         if self._update_busy:
             return
